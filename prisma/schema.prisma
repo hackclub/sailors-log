@@ -1,0 +1,16 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+model LastHeartbeat {
+  id         Int      @id @default(autoincrement())
+  timestamp  DateTime
+  updatedAt  DateTime @updatedAt
+}
+
+// Add your models here 
