@@ -21,6 +21,18 @@ async function addUserToAlert(hackatimeUserId) {
   }
 }
 
+async function getApiKeys(userIds) {
+  if (userIds.length === 0) return new Map();
+
+  const query = {
+    text: 'SELECT id, api_key FROM users WHERE id = ANY($1)',
+    values: [Array.from(userIds)]
+  };
+
+  const { rows } = await hackatime.query(query);
+  return new Map(rows.map(row => [row.id, row.api_key]));
+}
+
 async function checkMonitoredUsers(heartbeats) {
   // Get all monitored users
   const monitoredUsers = await prisma.codingActivityAlert.findMany();
@@ -35,7 +47,13 @@ async function checkMonitoredUsers(heartbeats) {
   
   if (activeMonitoredUsers.size > 0) {
     console.log('\nActive monitored users:', Array.from(activeMonitoredUsers).join(', '));
-    // TODO: Add notification logic here
+    
+    // Get API keys for active users
+    const apiKeys = await getApiKeys(activeMonitoredUsers);
+    console.log('\nAPI Keys:');
+    for (const [userId, apiKey] of apiKeys) {
+      console.log(`${userId}: ${apiKey}`);
+    }
   }
 }
 
