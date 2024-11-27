@@ -52,9 +52,11 @@ async function updateSessions(heartbeats) {
   // Process each user's heartbeats
   for (const [userId, userHeartbeats] of Object.entries(heartbeatsByUser)) {
     // Sort heartbeats by time
-    const sortedHeartbeats = userHeartbeats.sort((a, b) => 
-      new Date(a.time).getTime() - new Date(b.time).getTime()
-    );
+    const sortedHeartbeats = userHeartbeats.sort((a, b) => {
+      const timeA = new Date(a.time).getTime();
+      const timeB = new Date(b.time).getTime();
+      return timeA - timeB;
+    });
     
     // Get user's most recent session
     let currentSession = await prisma.session.findFirst({
@@ -62,41 +64,53 @@ async function updateSessions(heartbeats) {
         user_id: userId,
         is_active: true
       },
-      include: {
-        heartbeats: {
-          orderBy: {
-            time: 'desc'
-          },
-          take: 1
-        }
+      orderBy: {
+        end_time: 'desc'
       }
     });
 
+    let lastHeartbeatTime = null;
+
     for (const heartbeat of sortedHeartbeats) {
-      const heartbeatTime = new Date(heartbeat.time);
+      const currentTime = new Date(heartbeat.time);
 
       if (!currentSession) {
         // Start new session
         currentSession = await createNewSession(heartbeat);
+        lastHeartbeatTime = currentTime;
         continue;
       }
 
-      // Get the time of the most recent heartbeat in the session
-      const lastHeartbeatTime = currentSession.heartbeats[0]?.time ?? currentSession.start_time;
-      const lastTime = new Date(lastHeartbeatTime);
-      const currentTime = new Date(heartbeat.time);
-      const timeSinceLastHeartbeat = Math.abs(
-        (currentTime.getTime() - lastTime.getTime()) / 1000
-      );
+      // If this heartbeat is older than our session's start time, skip it
+      if (currentTime < new Date(currentSession.start_time)) {
+        console.log('Skipping older heartbeat:', currentTime.toISOString());
+        continue;
+      }
 
-      if (timeSinceLastHeartbeat > SESSION_TIMEOUT) {
-        // Close the current session at its last heartbeat time
+      const timeSinceLastHeartbeat = lastHeartbeatTime ? 
+        (currentTime.getTime() - lastHeartbeatTime.getTime()) / 1000 :
+        (currentTime.getTime() - new Date(currentSession.start_time).getTime()) / 1000;
+      
+      // Floor the seconds before comparison
+      const flooredTimeSinceLastHeartbeat = Math.floor(timeSinceLastHeartbeat);
+      
+      console.log(`Processing heartbeat for user ${userId}:`);
+      console.log('Session start time:', currentSession.start_time);
+      console.log('Last heartbeat time:', lastHeartbeatTime?.toISOString() ?? 'None');
+      console.log('Current heartbeat time:', currentTime.toISOString());
+      console.log('Seconds since last heartbeat (floored):', flooredTimeSinceLastHeartbeat);
+
+      if (flooredTimeSinceLastHeartbeat > SESSION_TIMEOUT) {
+        console.log('Creating new session due to timeout');
+        // Close the current session
         await closeSession(currentSession.id);
         // Start new session with this heartbeat
         currentSession = await createNewSession(heartbeat);
+        lastHeartbeatTime = currentTime;
       } else {
         // Update existing session with this heartbeat
         await updateSession(currentSession.id, heartbeat);
+        lastHeartbeatTime = currentTime;
       }
     }
   }
