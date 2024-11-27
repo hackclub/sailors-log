@@ -194,17 +194,20 @@ async function closeSession(sessionId) {
     }
   });
 
-  // Calculate final duration using the last heartbeat's time
+  // Get the last heartbeat time
   const lastHeartbeatTime = session.heartbeats[0]?.time ?? session.end_time;
+  const endTime = new Date(new Date(lastHeartbeatTime).getTime() + SESSION_TIMEOUT * 1000);
+
+  // Calculate final duration using the session end time
   const minutes = Math.max(0, 
-    (new Date(lastHeartbeatTime).getTime() - new Date(session.start_time).getTime()) / (1000 * 60)
+    (endTime.getTime() - new Date(session.start_time).getTime()) / (1000 * 60)
   );
 
   await prisma.session.update({
     where: { id: sessionId },
     data: {
       is_active: false,
-      end_time: lastHeartbeatTime,
+      end_time: endTime,
       minutes
     }
   });
