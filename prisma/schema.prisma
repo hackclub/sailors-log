@@ -36,7 +36,7 @@ model SyncedHeartbeat {
   operating_system  String?
   machine           String?
   user_agent        String?
-  time              Float
+  time              DateTime
   hash              String?
   origin            String?
   origin_id         String?
@@ -59,8 +59,8 @@ model SyncedHeartbeat {
 model Session {
   id                String    @id @default(cuid())
   user_id           String
-  start_time        Float
-  end_time          Float?
+  start_time        DateTime  @map("start_time")
+  end_time          DateTime? @map("end_time")
   minutes           Float     @default(0)
   is_active         Boolean   @default(true)
   projects          String    // JSON array

@@ -52,7 +52,9 @@ async function updateSessions(heartbeats) {
   // Process each user's heartbeats
   for (const [userId, userHeartbeats] of Object.entries(heartbeatsByUser)) {
     // Sort heartbeats by time
-    const sortedHeartbeats = userHeartbeats.sort((a, b) => a.time - b.time);
+    const sortedHeartbeats = userHeartbeats.sort((a, b) => 
+      new Date(a.time).getTime() - new Date(b.time).getTime()
+    );
     
     // Get user's most recent session
     let currentSession = await prisma.session.findFirst({
@@ -71,9 +73,7 @@ async function updateSessions(heartbeats) {
     });
 
     for (const heartbeat of sortedHeartbeats) {
-      const heartbeatTime = typeof heartbeat.time === 'string' || heartbeat.time instanceof Date
-        ? new Date(heartbeat.time).getTime() / 1000
-        : heartbeat.time;
+      const heartbeatTime = new Date(heartbeat.time);
 
       if (!currentSession) {
         // Start new session
@@ -83,7 +83,11 @@ async function updateSessions(heartbeats) {
 
       // Get the time of the most recent heartbeat in the session
       const lastHeartbeatTime = currentSession.heartbeats[0]?.time ?? currentSession.start_time;
-      const timeSinceLastHeartbeat = heartbeatTime - lastHeartbeatTime;
+      const lastTime = new Date(lastHeartbeatTime);
+      const currentTime = new Date(heartbeat.time);
+      const timeSinceLastHeartbeat = Math.abs(
+        (currentTime.getTime() - lastTime.getTime()) / 1000
+      );
 
       if (timeSinceLastHeartbeat > SESSION_TIMEOUT) {
         // Close the current session at its last heartbeat time
@@ -99,9 +103,7 @@ async function updateSessions(heartbeats) {
 }
 
 async function createNewSession(heartbeat) {
-  const time = typeof heartbeat.time === 'string' || heartbeat.time instanceof Date
-    ? new Date(heartbeat.time).getTime() / 1000
-    : heartbeat.time;
+  const time = new Date(heartbeat.time);
 
   return prisma.session.create({
     data: {
@@ -133,9 +135,7 @@ async function updateSession(sessionId, heartbeat) {
     where: { id: sessionId }
   });
 
-  const time = typeof heartbeat.time === 'string' || heartbeat.time instanceof Date
-    ? new Date(heartbeat.time).getTime() / 1000
-    : heartbeat.time;
+  const time = new Date(heartbeat.time);
 
   // Update session metadata
   const projects = new Set(JSON.parse(session.projects));
@@ -147,7 +147,9 @@ async function updateSession(sessionId, heartbeat) {
   if (heartbeat.editor) editors.add(heartbeat.editor);
 
   // Calculate minutes from session start to this heartbeat
-  const minutes = Math.max(0, (time - session.start_time) / 60);
+  const minutes = Math.max(0, 
+    (time.getTime() - new Date(session.start_time).getTime()) / (1000 * 60)
+  );
 
   await prisma.session.update({
     where: { id: sessionId },
@@ -180,7 +182,9 @@ async function closeSession(sessionId) {
 
   // Calculate final duration using the last heartbeat's time
   const lastHeartbeatTime = session.heartbeats[0]?.time ?? session.end_time;
-  const minutes = Math.max(0, (lastHeartbeatTime - session.start_time) / 60);
+  const minutes = Math.max(0, 
+    (new Date(lastHeartbeatTime).getTime() - new Date(session.start_time).getTime()) / (1000 * 60)
+  );
 
   await prisma.session.update({
     where: { id: sessionId },
@@ -197,19 +201,30 @@ async function storeHeartbeats(heartbeats) {
 
   const results = await Promise.allSettled(
     heartbeats.map(hb => {
-      // Convert time to float timestamp if it's a date
-      const time = hb.time instanceof Date ? 
-        hb.time.getTime() / 1000 : 
-        typeof hb.time === 'string' ? 
-          new Date(hb.time).getTime() / 1000 : 
-          hb.time;
-
-      // Helper function to convert string/null to integer
-      const toInt = (val) => {
-        if (val === null || val === undefined || val === '') return null;
-        const num = parseInt(val, 10);
-        return isNaN(num) ? null : num;
-      };
+      // Convert Unix timestamp to DateTime with validation
+      let time;
+      try {
+        // Ensure we have a valid number
+        const timestamp = typeof hb.time === 'string' ? parseFloat(hb.time) : hb.time;
+        if (!isFinite(timestamp)) {
+          throw new Error(`Invalid timestamp: ${hb.time}`);
+        }
+        // Convert timestamp to Date if it's not already a Date object
+        if (!(timestamp instanceof Date)) {
+            time = new Date(timestamp * 1000);
+        } else {
+            time = timestamp;
+        }
+        
+        // Validate the resulting date
+        if (time.toString() === 'Invalid Date' || time.getFullYear() < 2000 || time.getFullYear() > 2100) {
+          throw new Error(`Invalid date result: ${time} from timestamp ${timestamp}`);
+        }
+      } catch (error) {
+        console.error(`Error converting timestamp for heartbeat ${hb.id}:`, error);
+        console.error('Heartbeat data:', hb);
+        throw error;
+      }
 
       const data = {
         id: hb.id,
@@ -230,12 +245,12 @@ async function storeHeartbeats(heartbeats) {
         origin: hb.origin,
         origin_id: hb.origin_id,
         created_at: hb.created_at,
-        project_root_count: toInt(hb.project_root_count),
-        line_additions: toInt(hb.line_additions),
-        line_deletions: toInt(hb.line_deletions),
-        lines: toInt(hb.lines),
-        line_number: toInt(hb.line_number),
-        cursor_position: toInt(hb.cursor_position),
+        project_root_count: parseInt(hb.project_root_count, 10),
+        line_additions: parseInt(hb.line_additions, 10),
+        line_deletions: parseInt(hb.line_deletions, 10),
+        lines: parseInt(hb.lines, 10),
+        line_number: parseInt(hb.line_number, 10),
+        cursor_position: parseInt(hb.cursor_position, 10),
         dependencies: hb.dependencies
       };
 
