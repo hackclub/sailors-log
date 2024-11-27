@@ -13,7 +13,7 @@ async function getRecentHeartbeats() {
     
     // Get the last stored heartbeat timestamp
     const lastHeartbeat = await prisma.lastHeartbeat.findFirst();
-    console.log('Last stored heartbeat:', lastHeartbeat ? new Date(lastHeartbeat.timestamp).toISOString() : 'None found');
+    console.log('Last stored heartbeat:', lastHeartbeat ? new Date(lastHeartbeat.heartbeatCreatedAt).toISOString() : 'None found');
     
     const client = await pool.connect();
     console.log('Connected to Hackatime database');
@@ -29,13 +29,13 @@ async function getRecentHeartbeats() {
         WHERE created_at > $1
         ORDER BY created_at DESC
       `;
-      params = [lastHeartbeat.timestamp];
+      params = [lastHeartbeat.heartbeatCreatedAt];
     } else {
-      console.log('No previous heartbeat found, fetching last 10 minutes');
+      console.log('No previous heartbeat found, fetching last 5 minutes');
       query = `
         SELECT *
         FROM heartbeats
-        WHERE created_at > NOW() - INTERVAL '10 minutes'
+        WHERE created_at > NOW() - INTERVAL '5 minutes'
         ORDER BY created_at DESC
       `;
     }
@@ -56,10 +56,10 @@ async function getRecentHeartbeats() {
       console.log('Updating LastHeartbeat record...');
       await prisma.lastHeartbeat.upsert({
         where: { id: 1 },
-        update: { timestamp: mostRecentHeartbeat },
+        update: { heartbeatCreatedAt: mostRecentHeartbeat },
         create: { 
           id: 1,
-          timestamp: mostRecentHeartbeat
+          heartbeatCreatedAt: mostRecentHeartbeat
         }
       });
       console.log('LastHeartbeat record updated successfully');
@@ -82,12 +82,30 @@ async function getRecentHeartbeats() {
   }
 }
 
-// Example usage:
-getRecentHeartbeats()
-  .then(heartbeats => {
+// Example usage with proper cleanup:
+async function main() {
+  let exitCode = 0;
+  try {
+    const heartbeats = await getRecentHeartbeats();
     console.log('Execution completed successfully');
     console.log(`Processed ${heartbeats.length} heartbeats`);
-  })
-  .catch(err => {
+  } catch (err) {
     console.error('Failed to get heartbeats:', err);
-  });
+    exitCode = 1;
+  } finally {
+    console.log('Cleaning up connections...');
+    try {
+      await Promise.all([
+        prisma.$disconnect(),
+        pool.end()
+      ]);
+      console.log('Connections closed');
+    } catch (err) {
+      console.error('Error during cleanup:', err);
+      exitCode = 1;
+    }
+    process.exit(exitCode);
+  }
+}
+
+main();

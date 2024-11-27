@@ -8,9 +8,9 @@ datasource db {
 }
 
 model LastHeartbeat {
-  id         Int      @id @default(autoincrement())
-  timestamp  DateTime
-  updatedAt  DateTime @updatedAt
+  id                Int      @id @default(autoincrement())
+  heartbeatCreatedAt DateTime @map("heartbeat_created_at")
+  updatedAt         DateTime @updatedAt
 }
 
 // Add your models here 
