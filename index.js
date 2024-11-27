@@ -33,6 +33,33 @@ async function getApiKeys(userIds) {
   return new Map(rows.map(row => [row.id, row.api_key]));
 }
 
+async function getUserSummary(apiKey) {
+  const base64Key = Buffer.from(apiKey).toString('base64');
+  const response = await fetch('https://waka.hackclub.com/api/summary?interval=today&recompute=true', {
+    headers: {
+      'Authorization': `Basic ${base64Key}`,
+      'Accept': 'application/json'
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(`API request failed: ${response.status} ${response.statusText}`);
+  }
+
+  return response.json();
+}
+
+function calculateTotalMinutes(summary) {
+  return Math.round(
+    (summary.languages || [])
+      .reduce((total, lang) => total + lang.total, 0) / 60
+  );
+}
+
+function isSameDay(date1, date2) {
+  return date1.toISOString().split('T')[0] === date2.toISOString().split('T')[0];
+}
+
 async function checkMonitoredUsers(heartbeats) {
   // Get all monitored users
   const monitoredUsers = await prisma.codingActivityAlert.findMany();
@@ -50,9 +77,64 @@ async function checkMonitoredUsers(heartbeats) {
     
     // Get API keys for active users
     const apiKeys = await getApiKeys(activeMonitoredUsers);
-    console.log('\nAPI Keys:');
+    console.log('\nFetching activity summaries...');
+    
     for (const [userId, apiKey] of apiKeys) {
-      console.log(`${userId}: ${apiKey}`);
+      try {
+        const userAlert = monitoredUsers.find(u => u.hackatimeUserId === userId);
+        const summary = await getUserSummary(apiKey);
+        const totalMinutes = calculateTotalMinutes(summary);
+        const now = new Date();
+
+        console.log(`\nActivity summary for ${userId}:`);
+        
+        // Check if we're on a new day
+        if (!isSameDay(now, userAlert.lastCheckAt)) {
+          console.log('New day detected, resetting previous total');
+          await prisma.codingActivityAlert.update({
+            where: { id: userAlert.id },
+            data: { 
+              lastTotalMinutes: 0,
+              lastCheckAt: now
+            }
+          });
+          userAlert.lastTotalMinutes = 0;
+        }
+
+        // Calculate and display minutes coded since last check
+        const newMinutes = totalMinutes - userAlert.lastTotalMinutes;
+        if (newMinutes > 0) {
+          console.log(`Coded ${newMinutes} new minutes since last check`);
+        }
+        
+        // Display current activity
+        if (summary.projects?.length > 0) {
+          console.log('Projects:');
+          summary.projects.forEach(p => {
+            const minutes = Math.round(p.total / 60);
+            console.log(`  ${p.key}: ${minutes} minutes`);
+          });
+        }
+        
+        if (summary.languages?.length > 0) {
+          console.log('Languages:');
+          summary.languages.forEach(l => {
+            const minutes = Math.round(l.total / 60);
+            console.log(`  ${l.key}: ${minutes} minutes`);
+          });
+        }
+
+        // Update stored total
+        await prisma.codingActivityAlert.update({
+          where: { id: userAlert.id },
+          data: { 
+            lastTotalMinutes: totalMinutes,
+            lastCheckAt: now
+          }
+        });
+      } catch (error) {
+        console.error(`Failed to get summary for ${userId}:`, error.message);
+      }
     }
   }
 }
