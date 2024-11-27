@@ -5,6 +5,10 @@ import { PrismaClient } from '@prisma/client';
 const hackatime = new Pool({ connectionString: process.env.HACKATIME_DATABASE_URL });
 const prisma = new PrismaClient();
 
+const POLL_INTERVAL = 5 * 1000; // 30 seconds
+const RETENTION_HOURS = 24;
+const SESSION_TIMEOUT = 2 * 60; // 2 minutes in seconds
+
 async function addUserToAlert(hackatimeUserId) {
   try {
     const alert = await prisma.codingActivityAlert.create({
@@ -21,121 +25,241 @@ async function addUserToAlert(hackatimeUserId) {
   }
 }
 
-async function getApiKeys(userIds) {
-  if (userIds.length === 0) return new Map();
-
-  const query = {
-    text: 'SELECT id, api_key FROM users WHERE id = ANY($1)',
-    values: [Array.from(userIds)]
-  };
-
-  const { rows } = await hackatime.query(query);
-  return new Map(rows.map(row => [row.id, row.api_key]));
+async function cleanupOldHeartbeats() {
+  const cutoff = new Date(Date.now() - RETENTION_HOURS * 60 * 60 * 1000);
+  const { count } = await prisma.syncedHeartbeat.deleteMany({
+    where: {
+      created_at: {
+        lt: cutoff
+      }
+    }
+  });
+  
+  if (count > 0) {
+    console.log(`Cleaned up ${count} heartbeats older than ${RETENTION_HOURS} hours`);
+  }
 }
 
-async function getUserSummary(apiKey) {
-  const base64Key = Buffer.from(apiKey).toString('base64');
-  const response = await fetch('https://waka.hackclub.com/api/summary?interval=today&recompute=true', {
-    headers: {
-      'Authorization': `Basic ${base64Key}`,
-      'Accept': 'application/json'
+async function updateSessions(heartbeats) {
+  if (heartbeats.length === 0) return;
+
+  // Group heartbeats by user
+  const heartbeatsByUser = heartbeats.reduce((acc, hb) => {
+    (acc[hb.user_id] = acc[hb.user_id] || []).push(hb);
+    return acc;
+  }, {});
+
+  // Process each user's heartbeats
+  for (const [userId, userHeartbeats] of Object.entries(heartbeatsByUser)) {
+    // Sort heartbeats by time
+    const sortedHeartbeats = userHeartbeats.sort((a, b) => a.time - b.time);
+    
+    // Get user's most recent session
+    let currentSession = await prisma.session.findFirst({
+      where: {
+        user_id: userId,
+        is_active: true
+      },
+      include: {
+        heartbeats: {
+          orderBy: {
+            time: 'desc'
+          },
+          take: 1
+        }
+      }
+    });
+
+    for (const heartbeat of sortedHeartbeats) {
+      const heartbeatTime = typeof heartbeat.time === 'string' || heartbeat.time instanceof Date
+        ? new Date(heartbeat.time).getTime() / 1000
+        : heartbeat.time;
+
+      if (!currentSession) {
+        // Start new session
+        currentSession = await createNewSession(heartbeat);
+        continue;
+      }
+
+      // Get the time of the most recent heartbeat in the session
+      const lastHeartbeatTime = currentSession.heartbeats[0]?.time ?? currentSession.start_time;
+      const timeSinceLastHeartbeat = heartbeatTime - lastHeartbeatTime;
+
+      if (timeSinceLastHeartbeat > SESSION_TIMEOUT) {
+        // Close the current session at its last heartbeat time
+        await closeSession(currentSession.id);
+        // Start new session with this heartbeat
+        currentSession = await createNewSession(heartbeat);
+      } else {
+        // Update existing session with this heartbeat
+        await updateSession(currentSession.id, heartbeat);
+      }
+    }
+  }
+}
+
+async function createNewSession(heartbeat) {
+  const time = typeof heartbeat.time === 'string' || heartbeat.time instanceof Date
+    ? new Date(heartbeat.time).getTime() / 1000
+    : heartbeat.time;
+
+  return prisma.session.create({
+    data: {
+      user_id: heartbeat.user_id,
+      start_time: time,
+      end_time: time,
+      minutes: 0,
+      heartbeats_count: 1,
+      projects: JSON.stringify([heartbeat.project].filter(Boolean)),
+      languages: JSON.stringify([heartbeat.language].filter(Boolean)),
+      editors: JSON.stringify([heartbeat.editor].filter(Boolean)),
+      heartbeats: {
+        connect: { id: heartbeat.id }
+      }
+    },
+    include: {
+      heartbeats: {
+        orderBy: {
+          time: 'desc'
+        },
+        take: 1
+      }
+    }
+  });
+}
+
+async function updateSession(sessionId, heartbeat) {
+  const session = await prisma.session.findUnique({
+    where: { id: sessionId }
+  });
+
+  const time = typeof heartbeat.time === 'string' || heartbeat.time instanceof Date
+    ? new Date(heartbeat.time).getTime() / 1000
+    : heartbeat.time;
+
+  // Update session metadata
+  const projects = new Set(JSON.parse(session.projects));
+  const languages = new Set(JSON.parse(session.languages));
+  const editors = new Set(JSON.parse(session.editors));
+
+  if (heartbeat.project) projects.add(heartbeat.project);
+  if (heartbeat.language) languages.add(heartbeat.language);
+  if (heartbeat.editor) editors.add(heartbeat.editor);
+
+  // Calculate minutes from session start to this heartbeat
+  const minutes = Math.max(0, (time - session.start_time) / 60);
+
+  await prisma.session.update({
+    where: { id: sessionId },
+    data: {
+      end_time: time,
+      minutes,
+      heartbeats_count: { increment: 1 },
+      projects: JSON.stringify(Array.from(projects)),
+      languages: JSON.stringify(Array.from(languages)),
+      editors: JSON.stringify(Array.from(editors)),
+      heartbeats: {
+        connect: { id: heartbeat.id }
+      }
+    }
+  });
+}
+
+async function closeSession(sessionId) {
+  const session = await prisma.session.findUnique({
+    where: { id: sessionId },
+    include: {
+      heartbeats: {
+        orderBy: {
+          time: 'desc'
+        },
+        take: 1
+      }
     }
   });
 
-  if (!response.ok) {
-    throw new Error(`API request failed: ${response.status} ${response.statusText}`);
-  }
+  // Calculate final duration using the last heartbeat's time
+  const lastHeartbeatTime = session.heartbeats[0]?.time ?? session.end_time;
+  const minutes = Math.max(0, (lastHeartbeatTime - session.start_time) / 60);
 
-  return response.json();
-}
-
-function calculateTotalMinutes(summary) {
-  return Math.round(
-    (summary.languages || [])
-      .reduce((total, lang) => total + lang.total, 0) / 60
-  );
-}
-
-function isSameDay(date1, date2) {
-  return date1.toISOString().split('T')[0] === date2.toISOString().split('T')[0];
-}
-
-async function checkMonitoredUsers(heartbeats) {
-  // Get all monitored users
-  const monitoredUsers = await prisma.codingActivityAlert.findMany();
-  const monitoredUserIds = new Set(monitoredUsers.map(u => u.hackatimeUserId));
-
-  // Get unique active monitored users
-  const activeMonitoredUsers = new Set(
-    heartbeats
-      .filter(hb => monitoredUserIds.has(hb.user_id))
-      .map(hb => hb.user_id)
-  );
-  
-  if (activeMonitoredUsers.size > 0) {
-    console.log('\nActive monitored users:', Array.from(activeMonitoredUsers).join(', '));
-    
-    // Get API keys for active users
-    const apiKeys = await getApiKeys(activeMonitoredUsers);
-    console.log('\nFetching activity summaries...');
-    
-    for (const [userId, apiKey] of apiKeys) {
-      try {
-        const userAlert = monitoredUsers.find(u => u.hackatimeUserId === userId);
-        const summary = await getUserSummary(apiKey);
-        const totalMinutes = calculateTotalMinutes(summary);
-        const now = new Date();
-
-        console.log(`\nActivity summary for ${userId}:`);
-        
-        // Check if we're on a new day
-        if (!isSameDay(now, userAlert.lastCheckAt)) {
-          console.log('New day detected, resetting previous total');
-          await prisma.codingActivityAlert.update({
-            where: { id: userAlert.id },
-            data: { 
-              lastTotalMinutes: 0,
-              lastCheckAt: now
-            }
-          });
-          userAlert.lastTotalMinutes = 0;
-        }
-
-        // Calculate and display minutes coded since last check
-        const newMinutes = totalMinutes - userAlert.lastTotalMinutes;
-        if (newMinutes > 0) {
-          console.log(`Coded ${newMinutes} new minutes since last check`);
-        }
-        
-        // Display current activity
-        if (summary.projects?.length > 0) {
-          console.log('Projects:');
-          summary.projects.forEach(p => {
-            const minutes = Math.round(p.total / 60);
-            console.log(`  ${p.key}: ${minutes} minutes`);
-          });
-        }
-        
-        if (summary.languages?.length > 0) {
-          console.log('Languages:');
-          summary.languages.forEach(l => {
-            const minutes = Math.round(l.total / 60);
-            console.log(`  ${l.key}: ${minutes} minutes`);
-          });
-        }
-
-        // Update stored total
-        await prisma.codingActivityAlert.update({
-          where: { id: userAlert.id },
-          data: { 
-            lastTotalMinutes: totalMinutes,
-            lastCheckAt: now
-          }
-        });
-      } catch (error) {
-        console.error(`Failed to get summary for ${userId}:`, error.message);
-      }
+  await prisma.session.update({
+    where: { id: sessionId },
+    data: {
+      is_active: false,
+      end_time: lastHeartbeatTime,
+      minutes
     }
+  });
+}
+
+async function storeHeartbeats(heartbeats) {
+  if (heartbeats.length === 0) return;
+
+  const results = await Promise.allSettled(
+    heartbeats.map(hb => {
+      // Convert time to float timestamp if it's a date
+      const time = hb.time instanceof Date ? 
+        hb.time.getTime() / 1000 : 
+        typeof hb.time === 'string' ? 
+          new Date(hb.time).getTime() / 1000 : 
+          hb.time;
+
+      // Helper function to convert string/null to integer
+      const toInt = (val) => {
+        if (val === null || val === undefined || val === '') return null;
+        const num = parseInt(val, 10);
+        return isNaN(num) ? null : num;
+      };
+
+      const data = {
+        id: hb.id,
+        user_id: hb.user_id,
+        entity: hb.entity,
+        type: hb.type,
+        category: hb.category,
+        project: hb.project,
+        branch: hb.branch,
+        language: hb.language,
+        is_write: hb.is_write || false,
+        editor: hb.editor,
+        operating_system: hb.operating_system,
+        machine: hb.machine,
+        user_agent: hb.user_agent,
+        time,
+        hash: hb.hash,
+        origin: hb.origin,
+        origin_id: hb.origin_id,
+        created_at: hb.created_at,
+        project_root_count: toInt(hb.project_root_count),
+        line_additions: toInt(hb.line_additions),
+        line_deletions: toInt(hb.line_deletions),
+        lines: toInt(hb.lines),
+        line_number: toInt(hb.line_number),
+        cursor_position: toInt(hb.cursor_position),
+        dependencies: hb.dependencies
+      };
+
+      return prisma.syncedHeartbeat.upsert({
+        where: { id: hb.id },
+        create: data,
+        update: data
+      });
+    })
+  );
+
+  const succeeded = results.filter(r => r.status === 'fulfilled').length;
+  const failed = results.filter(r => r.status === 'rejected').length;
+
+  if (succeeded > 0) {
+    console.log(`Stored ${succeeded} new heartbeats`);
+    // Update sessions after storing heartbeats
+    await updateSessions(heartbeats);
+  }
+  if (failed > 0) {
+    console.log(`Failed to store ${failed} heartbeats`);
+    results
+      .filter(r => r.status === 'rejected')
+      .forEach(r => console.error('Storage error:', r.reason));
   }
 }
 
@@ -152,16 +276,16 @@ async function getHeartbeats() {
       text: 'SELECT * FROM heartbeats WHERE created_at > $1 ORDER BY created_at DESC',
       values: [lastHeartbeat.heartbeatCreatedAt]
     } : {
-      text: 'SELECT * FROM heartbeats ORDER BY created_at DESC LIMIT 1'
+      text: 'SELECT * FROM heartbeats WHERE created_at > NOW() - INTERVAL \'5 minutes\' ORDER BY created_at DESC'
     };
 
     // Get new heartbeats
     const { rows } = await client.query(query);
-    console.log(`Found ${rows.length} new heartbeats`);
-
-    // Check for monitored users
     if (rows.length > 0) {
-      await checkMonitoredUsers(rows);
+      console.log(`Found ${rows.length} new heartbeats`);
+      
+      // Store the heartbeats
+      await storeHeartbeats(rows);
       
       // Update last processed time
       await prisma.lastHeartbeat.upsert({
@@ -174,6 +298,15 @@ async function getHeartbeats() {
     return rows;
   } finally {
     client.release();
+  }
+}
+
+async function pollHeartbeats() {
+  try {
+    await getHeartbeats();
+    await cleanupOldHeartbeats();
+  } catch (error) {
+    console.error('Error during poll:', error);
   }
 }
 
@@ -194,17 +327,23 @@ if (process.argv[2] === 'add-user') {
     await prisma.$disconnect();
   }
 } else {
-  // Regular heartbeat checking
-  try {
-    const heartbeats = await getHeartbeats();
-    console.log(`Processed ${heartbeats.length} heartbeats`);
-  } catch (error) {
-    console.error('Error:', error);
-    process.exitCode = 1;
-  } finally {
+  // Start polling
+  console.log(`Starting heartbeat polling every ${POLL_INTERVAL/1000} seconds...`);
+  
+  // Initial poll
+  await pollHeartbeats();
+  
+  // Set up regular polling
+  const pollInterval = setInterval(pollHeartbeats, POLL_INTERVAL);
+  
+  // Handle graceful shutdown
+  process.on('SIGINT', async () => {
+    console.log('\nShutting down...');
+    clearInterval(pollInterval);
     await Promise.all([
       prisma.$disconnect(),
       hackatime.end()
     ]);
-  }
+    process.exit(0);
+  });
 }

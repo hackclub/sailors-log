@@ -22,4 +22,58 @@ model CodingActivityAlert {
   updatedAt         DateTime @updatedAt
 }
 
+model SyncedHeartbeat {
+  id                String    @id @map("id")
+  user_id           String
+  entity            String?
+  type              String?
+  category          String?
+  project           String?
+  branch            String?
+  language          String?
+  is_write          Boolean   @default(false)
+  editor            String?
+  operating_system  String?
+  machine           String?
+  user_agent        String?
+  time              Float
+  hash              String?
+  origin            String?
+  origin_id         String?
+  created_at        DateTime
+  project_root_count Int?
+  line_additions    Int?
+  line_deletions    Int?
+  lines             Int?
+  line_number       Int?     @map("line_number")
+  cursor_position   Int?     @map("cursor_position")
+  dependencies      String?
+  session           Session?  @relation(fields: [session_id], references: [id])
+  session_id        String?
+
+  @@index([created_at])
+  @@index([user_id])
+  @@index([time])
+}
+
+model Session {
+  id                String    @id @default(cuid())
+  user_id           String
+  start_time        Float
+  end_time          Float?
+  minutes           Float     @default(0)
+  is_active         Boolean   @default(true)
+  projects          String    // JSON array
+  languages         String    // JSON array
+  editors           String    // JSON array
+  heartbeats        SyncedHeartbeat[]
+  heartbeats_count  Int       @default(0)
+  created_at        DateTime  @default(now())
+  updated_at        DateTime  @updatedAt
+
+  @@index([user_id])
+  @@index([start_time])
+  @@index([is_active])
+}
+
 // Add your models here 
