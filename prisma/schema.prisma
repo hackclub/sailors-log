@@ -39,4 +39,18 @@ model SyncedHeartbeat {
   @@index([time])
 }
 
+model ProjectNotification {
+  id                String    @id @default(cuid())
+  user_id           String
+  project_name      String
+  last_notified_at  DateTime
+  last_total_seconds Int
+  created_at        DateTime  @default(now())
+  updated_at        DateTime  @updatedAt
+
+  @@unique([user_id, project_name])
+  @@index([user_id])
+  @@index([last_notified_at])
+}
+
 // Add your models here 
