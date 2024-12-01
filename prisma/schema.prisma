@@ -41,16 +41,29 @@ model SyncedHeartbeat {
 
 model ProjectNotification {
   id                String    @id @default(cuid())
-  user_id           String
-  project_name      String
-  last_notified_at  DateTime
-  last_total_seconds Int
-  created_at        DateTime  @default(now())
-  updated_at        DateTime  @updatedAt
+  user_id           String    @map("user_id")
+  project_name      String    @map("project_name")
+  last_notified_at  DateTime  @map("last_notified_at")
+  last_total_seconds Int      @map("last_total_seconds")
+  created_at        DateTime  @default(now()) @map("created_at")
+  updated_at        DateTime  @updatedAt @map("updated_at")
 
   @@unique([user_id, project_name])
   @@index([user_id])
   @@index([last_notified_at])
+}
+
+model SlackNotificationPreference {
+  id                String    @id @default(cuid())
+  slack_user_id     String    @map("slack_user_id")
+  slack_channel_id  String    @map("slack_channel_id")
+  enabled           Boolean   @default(true)
+  created_at        DateTime  @default(now())
+  updated_at        DateTime  @updatedAt
+
+  @@unique([slack_user_id, slack_channel_id])
+  @@index([slack_user_id])
+  @@index([slack_channel_id])
 }
 
 // Add your models here 

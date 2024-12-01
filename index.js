@@ -1,134 +1,179 @@
 import { Pool } from 'pg';
 import { PrismaClient } from '@prisma/client';
 
+// Load environment variables from .env file
+const envPath = process.env.ENV_PATH || '.env';
+await import('dotenv').then(dotenv => dotenv.config({ path: envPath }));
+
 // Initialize databases
 const hackatime = new Pool({ connectionString: process.env.HACKATIME_DATABASE_URL });
 const prisma = new PrismaClient();
 
+// Constants
 const POLL_INTERVAL = 5 * 1000; // 5 seconds
 const RETENTION_HOURS = 24;
+const NOTIFICATION_PERIOD_SECONDS = 3600; // 1 hour
+// const NOTIFICATION_PERIOD_SECONDS = 60 * 5;
+const port = process.env.PORT || 3000;
 
-async function getUserApiKey(userId) {
-  const client = await hackatime.connect();
-  try {
-    const { rows } = await client.query(
-      'SELECT api_key FROM users WHERE id = $1',
-      [userId]
-    );
-    return rows[0]?.api_key;
-  } finally {
-    client.release();
+// Verify Slack requests are genuine using signing secret
+async function verifySlackRequest(req) {
+  const slackSigningSecret = process.env.SLACK_SIGNING_SECRET;
+  if (!slackSigningSecret) {
+    throw new Error('SLACK_SIGNING_SECRET environment variable is not set');
   }
-}
 
-async function fetchUserSummary(apiKey) {
-  try {
-    const response = await fetch('https://waka.hackclub.com/api/summary?interval=all_time&recompute=true', {
-      headers: {
-        'accept': 'application/json',
-        'Authorization': `Bearer ${Buffer.from(apiKey).toString('base64')}`
-      }
+  const timestamp = req.headers.get('x-slack-request-timestamp');
+  const slackSignature = req.headers.get('x-slack-signature');
+  
+  // Check if request is older than 5 minutes
+  const fiveMinutesAgo = Math.floor(Date.now() / 1000) - 60 * 5;
+  if (parseInt(timestamp) < fiveMinutesAgo) {
+    throw new Error('Request is too old');
+  }
+
+  // Get the raw body from FormData
+  const formData = await req.formData();
+  const rawBody = new URLSearchParams(formData).toString();
+  
+  // Create the signature base string by concatenating version, timestamp, and body
+  const sigBasestring = `v0:${timestamp}:${rawBody}`;
+  
+  // Create HMAC SHA256 hash using signing secret as key
+  const hmac = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(slackSigningSecret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  
+  const signature_bytes = await crypto.subtle.sign(
+    "HMAC",
+    hmac,
+    new TextEncoder().encode(sigBasestring)
+  );
+  
+  // Convert the hash to hex
+  const mySignature = 'v0=' + Array.from(new Uint8Array(signature_bytes))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+  
+  // Use crypto.timingSafeEqual to prevent timing attacks
+  if (mySignature !== slackSignature) {
+    console.log('Request details:', {
+      timestamp,
+      body: rawBody,
+      baseString: sigBasestring,
+      expectedSig: slackSignature,
+      calculatedSig: mySignature
     });
-    
-    if (!response.ok) {
-      throw new Error(`API request failed with status ${response.status}`);
-    }
-    
-    return await response.json();
-  } catch (error) {
-    console.error('Error fetching user summary:', error);
-    return null;
+    throw new Error('Invalid signature');
   }
+
+  return formData;
 }
 
-async function checkProjectMilestones(userId, summary) {
-  const projects = summary.projects || [];
-  const notifications = [];
+async function handleSlashCommand(formData) {
+  // Get command parameters from FormData
+  const command = formData.get('command');
+  const text = formData.get('text');
+  const user_id = formData.get('user_id');
+  const channel_id = formData.get('channel_id');
 
-  for (const project of projects) {
-    const projectName = project.key;
-    const totalSeconds = project.total;
+  console.log('Received command:', { command, text, user_id, channel_id });
 
-    // Get last notification for this user-project
-    const lastNotification = await prisma.projectNotification.findUnique({
+  // Verify this is our command
+  if (command !== '/spyglass') {
+    return new Response(JSON.stringify({ error: 'Invalid command' }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+
+  // Parse the command
+  const action = text?.trim().toLowerCase();
+
+  // Handle status check
+  if (action === 'status') {
+    const pref = await prisma.slackNotificationPreference.findUnique({
       where: {
-        user_id_project_name: {
-          user_id: userId,
-          project_name: projectName
+        slack_user_id_slack_channel_id: {
+          slack_user_id: user_id,
+          slack_channel_id: channel_id
         }
       }
     });
 
-    if (!lastNotification) {
-      // First time seeing this project, create initial notification record
-      await prisma.projectNotification.create({
-        data: {
-          user_id: userId,
-          project_name: projectName,
-          last_notified_at: new Date(),
-          last_total_seconds: totalSeconds
-        }
-      });
-      continue;
-    }
-
-    // Calculate seconds coded since last notification
-    const secondsSinceNotification = totalSeconds - lastNotification.last_total_seconds;
-    
-    // Check if they've coded for an hour (3600 seconds) since last notification
-    if (secondsSinceNotification >= 3600) {
-      const hours = Math.floor(secondsSinceNotification / 3600);
-      notifications.push({
-        project: projectName,
-        hours,
-        total_hours: Math.floor(totalSeconds / 3600)
-      });
-
-      // Update the notification record
-      await prisma.projectNotification.update({
-        where: {
-          id: lastNotification.id
-        },
-        data: {
-          last_notified_at: new Date(),
-          last_total_seconds: totalSeconds
-        }
+    if (!pref) {
+      return new Response(JSON.stringify({
+        response_type: 'ephemeral',
+        text: 'You have no notification preferences set for this channel. Notifications are disabled.'
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
       });
     }
+
+    return new Response(JSON.stringify({
+      response_type: 'ephemeral',
+      text: `Notifications are currently ${pref.enabled ? 'enabled' : 'disabled'} in this channel.`
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' }
+    });
   }
 
-  return notifications;
-}
+  // Handle on/off commands
+  if (!['on', 'off'].includes(action)) {
+    return new Response(JSON.stringify({
+      response_type: 'ephemeral',
+      text: 'Usage:\n' +
+           '• `/spyglass on` - Enable notifications\n' +
+           '• `/spyglass off` - Disable notifications\n' +
+           '• `/spyglass status` - Check current settings'
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
 
-async function processNewHeartbeats(heartbeats) {
-  // Group heartbeats by user
-  const userHeartbeats = heartbeats.reduce((acc, hb) => {
-    (acc[hb.user_id] = acc[hb.user_id] || []).push(hb);
-    return acc;
-  }, {});
-
-  // Process each user's heartbeats
-  for (const [userId, beats] of Object.entries(userHeartbeats)) {
-    const apiKey = await getUserApiKey(userId);
-    if (!apiKey) {
-      console.log(`No API key found for user ${userId}`);
-      continue;
-    }
-
-    console.log(`Fetching summary for user ${userId}`);
-    const summary = await fetchUserSummary(apiKey);
-    if (summary) {
-      console.log(`Summary for user ${userId}:`, JSON.stringify(summary, null, 2));
-      
-      // Check for project milestones
-      const notifications = await checkProjectMilestones(userId, summary);
-      
-      // Log notifications (you can replace this with actual notifications later)
-      for (const notification of notifications) {
-        console.log(`🎉 User ${userId} has coded ${notification.hours} more hours in ${notification.project}! ` +
-                   `Total: ${notification.total_hours} hours`);
+  try {
+    // Update or create preference
+    const enabled = action === 'on';
+    await prisma.slackNotificationPreference.upsert({
+      where: {
+        slack_user_id_slack_channel_id: {
+          slack_user_id: user_id,
+          slack_channel_id: channel_id
+        }
+      },
+      create: {
+        slack_user_id: user_id,
+        slack_channel_id: channel_id,
+        enabled
+      },
+      update: {
+        enabled
       }
-    }
+    });
+
+    return new Response(JSON.stringify({
+      response_type: 'ephemeral',
+      text: `✅ Coding notifications have been turned ${action} in this channel.`
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  } catch (error) {
+    console.error('Error handling slash command:', error);
+    return new Response(JSON.stringify({
+      response_type: 'ephemeral',
+      text: 'Sorry, there was an error processing your request.'
+    }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    });
   }
 }
 
@@ -214,9 +259,10 @@ async function storeHeartbeats(heartbeats) {
 
   if (succeeded > 0) {
     console.log(`Stored ${succeeded} new heartbeats`);
-    // Process new heartbeats for API requests
+    // Process new heartbeats for notifications
     await processNewHeartbeats(heartbeats);
   }
+  
   if (failed > 0) {
     console.log(`Failed to store ${failed} heartbeats`);
     results
@@ -226,10 +272,12 @@ async function storeHeartbeats(heartbeats) {
 }
 
 async function getHeartbeats() {
+  console.log('Connecting to hackatime database...');
   const client = await hackatime.connect();
   
   try {
     // Get last processed heartbeat time from SyncedHeartbeat
+    console.log('Finding last synced heartbeat...');
     const lastHeartbeat = await prisma.syncedHeartbeat.findFirst({
       orderBy: { created_at: 'desc' }
     });
@@ -237,33 +285,52 @@ async function getHeartbeats() {
     // Get cutoff time (24 hours ago)
     const cutoffTime = new Date(Date.now() - RETENTION_HOURS * 60 * 60 * 1000);
 
-    let startTime;
-    if (!lastHeartbeat?.created_at || lastHeartbeat.created_at < cutoffTime) {
-      // If no last heartbeat or it's too old, just get recent heartbeats
+    let query;
+    if (!lastHeartbeat?.created_at) {
+      // If no heartbeats synced yet, get the 500 most recent ones
+      query = {
+        text: 'SELECT * FROM heartbeats ORDER BY created_at DESC LIMIT 500',
+        values: []
+      };
+      console.log('No heartbeats found, fetching 500 most recent heartbeats');
+    } else if (lastHeartbeat.created_at < cutoffTime) {
+      // If last heartbeat is too old, get recent ones
       startTime = new Date(Date.now() - POLL_INTERVAL);
-      console.log('No recent heartbeats, fetching last poll interval:', startTime.toISOString());
+      query = {
+        text: 'SELECT * FROM heartbeats WHERE created_at > $1 ORDER BY created_at DESC',
+        values: [startTime]
+      };
+      console.log('Last heartbeat too old, fetching from:', startTime.toISOString());
     } else {
-      // Otherwise, continue from last heartbeat
-      startTime = lastHeartbeat.created_at;
-      console.log('Fetching heartbeats since:', startTime.toISOString());
+      // Continue from last heartbeat
+      query = {
+        text: 'SELECT * FROM heartbeats WHERE created_at > $1 ORDER BY created_at DESC',
+        values: [lastHeartbeat.created_at]
+      };
+      console.log('Fetching heartbeats since:', lastHeartbeat.created_at.toISOString());
     }
 
-    // Build query with time constraint
-    const query = {
-      text: 'SELECT * FROM heartbeats WHERE created_at > $1 ORDER BY created_at DESC',
-      values: [startTime]
-    };
+    console.log('Executing query:', query);
 
     // Get new heartbeats
+    console.log('Fetching heartbeats from hackatime...');
     const { rows } = await client.query(query);
+    console.log(`Query complete. Found ${rows.length} heartbeats.`);
+
     if (rows.length > 0) {
-      console.log(`Found ${rows.length} new heartbeats`);
+      console.log('Processing heartbeats...');
       await storeHeartbeats(rows);
+      console.log('Finished processing heartbeats.');
     }
 
     return rows;
+  } catch (error) {
+    console.error('Error in getHeartbeats:', error);
+    throw error;
   } finally {
-    client.release();
+    console.log('Releasing database connection...');
+    await client.release();
+    console.log('Database connection released.');
   }
 }
 
@@ -276,7 +343,289 @@ async function pollHeartbeats() {
   }
 }
 
-// Start polling
+async function sendSlackNotification(channel, message) {
+  try {
+    const response = await fetch('https://slack.com/api/chat.postMessage', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.SLACK_BOT_TOKEN}`
+      },
+      body: JSON.stringify({
+        channel,
+        text: message,
+        unfurl_links: false,
+        unfurl_media: false
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const result = await response.json();
+    if (!result.ok) {
+      throw new Error(`Slack API error: ${result.error}`);
+    }
+  } catch (error) {
+    console.error('Error sending Slack notification:', error);
+  }
+}
+
+function getTimeUnit(seconds) {
+  if (seconds < 60) return 'seconds';
+  if (seconds < 3600) return 'minutes';
+  return 'hours';
+}
+
+function formatTimeValue(seconds, unit) {
+  switch (unit) {
+    case 'seconds':
+      return seconds;
+    case 'minutes':
+      return Math.floor(seconds / 60);
+    case 'hours':
+      return Math.floor(seconds / 3600);
+    default:
+      return seconds;
+  }
+}
+
+function formatTotalHours(seconds) {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  if (minutes > 0) {
+    return `${hours}h ${minutes}m`;
+  }
+  return `${hours}h`;
+}
+
+async function notifyChannelsAboutCoding(userId, secondsCoded, totalSeconds, project) {
+  // Find all enabled notification preferences for this user
+  const preferences = await prisma.slackNotificationPreference.findMany({
+    where: {
+      slack_user_id: userId,
+      enabled: true
+    }
+  });
+
+  if (preferences.length === 0) {
+    return;
+  }
+
+  // Determine time unit based on notification period
+  const timeUnit = getTimeUnit(NOTIFICATION_PERIOD_SECONDS);
+  const periodCount = formatTimeValue(secondsCoded, timeUnit);
+  const totalTime = formatTotalHours(totalSeconds);
+
+  const message = `🎉 <@${userId}> has reached ${periodCount} ${timeUnit} coding on *${project}*. Nice work!\nTotal: ${totalTime}`;
+
+  // Send notification to each enabled channel
+  for (const pref of preferences) {
+    await sendSlackNotification(pref.slack_channel_id, message);
+  }
+}
+
+async function checkAndNotifyCodingMilestones(userId, summary) {
+  console.log(`Checking milestones for user ${userId}`);
+  
+  const projects = summary.projects || [];
+  console.log(`Found ${projects.length} projects`);
+
+  for (const project of projects) {
+    const projectName = project.key;
+    const totalSeconds = project.total;
+    console.log(`\nChecking project: ${projectName} (${totalSeconds} seconds)`);
+
+    // Get last notification for this user-project
+    const lastNotification = await prisma.projectNotification.findUnique({
+      where: {
+        user_id_project_name: {
+          user_id: userId,
+          project_name: projectName
+        }
+      }
+    });
+
+    if (!lastNotification) {
+      console.log(`First time seeing project ${projectName}, creating initial record`);
+      try {
+        await prisma.projectNotification.create({
+          data: {
+            user_id: userId,
+            project_name: projectName,
+            last_notified_at: new Date(),
+            last_total_seconds: totalSeconds
+          }
+        });
+        console.log('Initial record created successfully');
+      } catch (error) {
+        console.error('Error creating initial record:', error);
+      }
+      continue;
+    }
+
+    // Calculate seconds coded since last notification
+    const secondsSinceNotification = totalSeconds - lastNotification.last_total_seconds;
+    const periodsCompleted = Math.floor(secondsSinceNotification / NOTIFICATION_PERIOD_SECONDS);
+    
+    // Check if they've coded for one or more complete periods
+    if (periodsCompleted >= 1) {
+      const timeUnit = getTimeUnit(NOTIFICATION_PERIOD_SECONDS);
+      const periodSeconds = periodsCompleted * NOTIFICATION_PERIOD_SECONDS;
+      console.log(`Notification threshold reached! ${formatTimeValue(periodSeconds, timeUnit)} ${timeUnit}`);
+      
+      // Send notifications
+      await notifyChannelsAboutCoding(userId, periodSeconds, totalSeconds, projectName);
+
+      // Update the notification record
+      try {
+        await prisma.projectNotification.update({
+          where: {
+            id: lastNotification.id
+          },
+          data: {
+            last_notified_at: new Date(),
+            last_total_seconds: totalSeconds
+          }
+        });
+        console.log('Updated notification record successfully');
+      } catch (error) {
+        console.error('Error updating notification record:', error);
+      }
+    } else {
+      const timeUnit = getTimeUnit(NOTIFICATION_PERIOD_SECONDS);
+      const current = formatTimeValue(secondsSinceNotification, timeUnit);
+      const needed = formatTimeValue(NOTIFICATION_PERIOD_SECONDS, timeUnit);
+      console.log(`Not enough time for notification yet (${current}/${needed} ${timeUnit})`);
+    }
+  }
+}
+
+async function getUserApiKey(userId) {
+  const client = await hackatime.connect();
+  try {
+    const { rows } = await client.query(
+      'SELECT api_key FROM users WHERE id = $1',
+      [userId]
+    );
+    return rows[0]?.api_key;
+  } finally {
+    client.release();
+  }
+}
+
+async function fetchUserSummary(apiKey) {
+  try {
+    const response = await fetch('https://waka.hackclub.com/api/summary?interval=all_time&recompute=true', {
+      headers: {
+        'accept': 'application/json',
+        'Authorization': `Bearer ${Buffer.from(apiKey).toString('base64')}`
+      }
+    });
+    
+    if (!response.ok) {
+      throw new Error(`API request failed with status ${response.status}`);
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.error('Error fetching user summary:', error);
+    return null;
+  }
+}
+
+async function processNewHeartbeats(heartbeats) {
+  console.log('Processing new heartbeats...');
+  // Group heartbeats by user
+  const userHeartbeats = heartbeats.reduce((acc, hb) => {
+    (acc[hb.user_id] = acc[hb.user_id] || []).push(hb);
+    return acc;
+  }, {});
+
+  console.log(`Processing heartbeats for ${Object.keys(userHeartbeats).length} users`);
+
+  // Process each user's heartbeats
+  for (const [userId, beats] of Object.entries(userHeartbeats)) {
+    console.log(`Processing ${beats.length} heartbeats for user ${userId}`);
+    
+    // Auto-subscribe user to default channel if not already subscribed
+    const defaultChannel = process.env.SLACK_CHANNEL_HEIDIS_SPYGLASS;
+    if (defaultChannel) {
+      const existingPref = await prisma.slackNotificationPreference.findUnique({
+        where: {
+          slack_user_id_slack_channel_id: {
+            slack_user_id: userId,
+            slack_channel_id: defaultChannel
+          }
+        }
+      });
+
+      if (!existingPref) {
+        try {
+          await prisma.slackNotificationPreference.create({
+            data: {
+              slack_user_id: userId,
+              slack_channel_id: defaultChannel,
+              enabled: true
+            }
+          });
+          console.log(`Auto-subscribed user ${userId} to notifications in channel ${defaultChannel}`);
+        } catch (error) {
+          console.error(`Failed to auto-subscribe user ${userId}:`, error);
+        }
+      }
+    }
+
+    // Get API key and process coding time
+    const apiKey = await getUserApiKey(userId);
+    if (!apiKey) {
+      console.log(`No API key found for user ${userId}`);
+      continue;
+    }
+
+    console.log(`Fetching summary for user ${userId}`);
+    const summary = await fetchUserSummary(apiKey);
+    if (summary) {
+      console.log(`Checking coding milestones for user ${userId}`);
+      await checkAndNotifyCodingMilestones(userId, summary);
+      console.log(`Finished processing user ${userId}`);
+    }
+  }
+  console.log('Finished processing all heartbeats');
+}
+
+// Create HTTP server for Slack commands
+const server = Bun.serve({
+  port,
+  async fetch(req) {
+    // Only accept POST requests to /slack/commands
+    if (req.method !== 'POST' || new URL(req.url).pathname !== '/slack/commands') {
+      return new Response('Not Found', { status: 404 });
+    }
+
+    try {
+      // Verify the request is from Slack and get form data
+      const formData = await verifySlackRequest(req);
+      
+      // Handle the command
+      return await handleSlashCommand(formData);
+    } catch (error) {
+      console.error('Error processing request:', error);
+      return new Response(JSON.stringify({
+        response_type: 'ephemeral',
+        text: 'Sorry, there was an error processing your request.'
+      }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+  },
+});
+
+console.log(`Server listening on port ${server.port}`);
+
+// Start heartbeat polling
 console.log(`Starting heartbeat polling every ${POLL_INTERVAL/1000} seconds...`);
 
 // Initial poll
