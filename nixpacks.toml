@@ -1,3 +1,3 @@
 [phases.setup]
-  nixPkgs = ['...', 'openssl']
+  nixPkgs = ['...', 'openssl', 'bun']
   nixLibs = ['openssl']
