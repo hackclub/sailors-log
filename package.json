@@ -5,7 +5,10 @@
   },
   "scripts": {
     "dev": "bun run index.js",
-    "start": "cp prisma/schema.production.prisma prisma/schema.prisma && bunx prisma generate && bun run index.js",
-    "prisma:deploy": "cp prisma/schema.production.prisma prisma/schema.prisma && bunx prisma migrate deploy"
+    "setup": "cp prisma/schema.production.prisma prisma/schema.prisma && bunx prisma generate",
+    "migrate": "bunx prisma migrate deploy",
+    "start": "bun install && bun run setup && bun run migrate && bun run index.js",
+    "prisma:deploy": "cp prisma/schema.production.prisma prisma/schema.prisma && bunx prisma migrate deploy",
+    "production": "bun install && bun run setup && bun run migrate && bun run index.js"
   }
 }
