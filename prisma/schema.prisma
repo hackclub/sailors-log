@@ -66,4 +66,28 @@ model SlackNotificationPreference {
   @@index([slack_channel_id])
 }
 
+model UserCodingTime {
+  id                String    @id @default(cuid())
+  user_id           String    @map("user_id")
+  date              DateTime  @map("date")
+  total_seconds     Int       @map("total_seconds")
+  created_at        DateTime  @default(now()) @map("created_at")
+  updated_at        DateTime  @updatedAt @map("updated_at")
+
+  @@unique([user_id, date])
+  @@index([user_id])
+  @@index([date])
+}
+
+model UserSummary {
+  id                String    @id @default(cuid())
+  user_id           String    @map("user_id")
+  summary_data      String    @map("summary_data") // JSON string of the summary response
+  created_at        DateTime  @default(now()) @map("created_at")
+  updated_at        DateTime  @updatedAt @map("updated_at")
+
+  @@index([user_id])
+  @@index([created_at])
+}
+
 // Add your models here 

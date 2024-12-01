@@ -1,2 +1,5 @@
 Use root level async await
+
 We are using Bun
+
+Generate Prisma migrations, instead of resetting the DB. Assume we have production data we don't want to lose.

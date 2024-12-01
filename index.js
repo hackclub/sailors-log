@@ -94,44 +94,16 @@ async function handleSlashCommand(formData) {
   // Parse the command
   const action = text?.trim().toLowerCase();
 
-  // Handle status check
-  if (action === 'status') {
-    const pref = await prisma.slackNotificationPreference.findUnique({
-      where: {
-        slack_user_id_slack_channel_id: {
-          slack_user_id: user_id,
-          slack_channel_id: channel_id
-        }
-      }
-    });
-
-    if (!pref) {
-      return new Response(JSON.stringify({
-        response_type: 'ephemeral',
-        text: 'You have no notification preferences set for this channel. Notifications are disabled.'
-      }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' }
-      });
-    }
-
-    return new Response(JSON.stringify({
-      response_type: 'ephemeral',
-      text: `Notifications are currently ${pref.enabled ? 'enabled' : 'disabled'} in this channel.`
-    }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' }
-    });
-  }
-
-  // Handle on/off commands
-  if (!['on', 'off'].includes(action)) {
+  // Handle empty command
+  if (!action) {
     return new Response(JSON.stringify({
       response_type: 'ephemeral',
       text: 'Usage:\n' +
            '• `/spyglass on` - Enable notifications\n' +
            '• `/spyglass off` - Disable notifications\n' +
-           '• `/spyglass status` - Check current settings'
+           '• `/spyglass status` - Check notification status\n' +
+           '• `/spyglass leaderboard` - Show today\'s coding leaderboard\n' +
+           '• `/spyglass leaderboard week` - Show this week\'s coding leaderboard'
     }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' }
@@ -139,34 +111,96 @@ async function handleSlashCommand(formData) {
   }
 
   try {
-    // Update or create preference
-    const enabled = action === 'on';
-    await prisma.slackNotificationPreference.upsert({
-      where: {
-        slack_user_id_slack_channel_id: {
-          slack_user_id: user_id,
-          slack_channel_id: channel_id
-        }
-      },
-      create: {
-        slack_user_id: user_id,
-        slack_channel_id: channel_id,
-        enabled
-      },
-      update: {
-        enabled
-      }
-    });
+    // Handle leaderboard command
+    if (action === 'leaderboard' || action === 'leaderboard week') {
+      console.log('Processing leaderboard command:', action);
+      const period = action === 'leaderboard week' ? 'week' : 'day';
+      console.log('Fetching leaderboard for period:', period);
+      const message = await getLeaderboard(channel_id, period);
+      
+      return new Response(JSON.stringify({
+        response_type: 'in_channel', // Make the response visible to everyone
+        text: message
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
 
+    // Handle status check
+    if (action === 'status') {
+      const pref = await prisma.slackNotificationPreference.findUnique({
+        where: {
+          slack_user_id_slack_channel_id: {
+            slack_user_id: user_id,
+            slack_channel_id: channel_id
+          }
+        }
+      });
+
+      if (!pref) {
+        return new Response(JSON.stringify({
+          response_type: 'ephemeral',
+          text: 'You have no notification preferences set for this channel. Notifications are disabled.'
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+
+      return new Response(JSON.stringify({
+        response_type: 'ephemeral',
+        text: `Notifications are currently ${pref.enabled ? 'enabled' : 'disabled'} in this channel.`
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    // Handle on/off commands
+    if (action === 'on' || action === 'off') {
+      const enabled = action === 'on';
+      await prisma.slackNotificationPreference.upsert({
+        where: {
+          slack_user_id_slack_channel_id: {
+            slack_user_id: user_id,
+            slack_channel_id: channel_id
+          }
+        },
+        create: {
+          slack_user_id: user_id,
+          slack_channel_id: channel_id,
+          enabled
+        },
+        update: {
+          enabled
+        }
+      });
+
+      return new Response(JSON.stringify({
+        response_type: 'ephemeral',
+        text: `✅ Coding notifications have been turned ${action} in this channel.`
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    // If we get here, the command is unknown
     return new Response(JSON.stringify({
       response_type: 'ephemeral',
-      text: `✅ Coding notifications have been turned ${action} in this channel.`
+      text: 'Usage:\n' +
+           '• `/spyglass on` - Enable notifications\n' +
+           '• `/spyglass off` - Disable notifications\n' +
+           '• `/spyglass status` - Check notification status\n' +
+           '• `/spyglass leaderboard` - Show today\'s coding leaderboard\n' +
+           '• `/spyglass leaderboard week` - Show this week\'s coding leaderboard'
     }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' }
     });
   } catch (error) {
-    console.error('Error handling slash command:', error);
+    console.error('Error handling command:', error);
     return new Response(JSON.stringify({
       response_type: 'ephemeral',
       text: 'Sorry, there was an error processing your request.'
@@ -515,12 +549,166 @@ async function getUserApiKey(userId) {
   }
 }
 
+async function getLeaderboard(channel_id, period = 'day') {
+  const now = new Date();
+  const startDate = new Date();
+  
+  if (period === 'week') {
+    startDate.setDate(startDate.getDate() - 7);
+  } else {
+    startDate.setHours(0, 0, 0, 0); // Start of today
+  }
+
+  // Get all users subscribed to this channel
+  const subscribers = await prisma.slackNotificationPreference.findMany({
+    where: {
+      slack_channel_id: channel_id,
+      enabled: true
+    },
+    select: {
+      slack_user_id: true
+    }
+  });
+
+  // Get latest summaries for all users
+  const userStats = [];
+  
+  for (const subscriber of subscribers) {
+    try {
+      // Get all summaries for this user in the period
+      const summaries = await prisma.userSummary.findMany({
+        where: {
+          user_id: subscriber.slack_user_id,
+          created_at: {
+            gte: startDate,
+            lte: now
+          }
+        },
+        orderBy: {
+          created_at: 'asc'
+        }
+      });
+
+      if (summaries.length < 2) {
+        console.log(`Not enough summaries found for user ${subscriber.slack_user_id}`);
+        continue;
+      }
+
+      // Find min and max total seconds
+      let minSeconds = Infinity;
+      let maxSeconds = 0;
+      let minSummary;
+      let maxSummary;
+
+      summaries.forEach(summary => {
+        const data = JSON.parse(summary.summary_data);
+        const totalSeconds = data.projects?.reduce((total, project) => total + (project.total || 0), 0) || 0;
+        if (totalSeconds < minSeconds) {
+          minSeconds = totalSeconds;
+          minSummary = data;
+        }
+        if (totalSeconds > maxSeconds) {
+          maxSeconds = totalSeconds;
+          maxSummary = data;
+        }
+      });
+
+      const totalSeconds = maxSeconds - minSeconds;
+
+      // Calculate project and language differences
+      const projectStats = new Map();
+      if (maxSummary?.projects && minSummary?.projects) {
+        const minProjects = new Map(minSummary.projects.map(p => [p.key, p.total || 0]));
+        const minLanguages = new Map(minSummary.languages?.map(l => [l.key, l.total || 0]) || []);
+        
+        // Group languages by project based on max summary
+        const projectLanguages = new Map();
+        maxSummary.languages?.forEach(lang => {
+          const diff = (lang.total || 0) - (minLanguages.get(lang.key) || 0);
+          if (diff > 0) {
+            maxSummary.projects.forEach(proj => {
+              if (!projectLanguages.has(proj.key)) {
+                projectLanguages.set(proj.key, new Set());
+              }
+              projectLanguages.get(proj.key).add(lang.key);
+            });
+          }
+        });
+
+        // Calculate project times and associate languages
+        maxSummary.projects.forEach(p => {
+          const diff = (p.total || 0) - (minProjects.get(p.key) || 0);
+          if (diff > 0) {
+            projectStats.set(p.key, {
+              seconds: diff,
+              languages: Array.from(projectLanguages.get(p.key) || []).sort()
+            });
+          }
+        });
+      }
+
+      // Only add users who have coded during this period
+      if (totalSeconds > 0) {
+        userStats.push({
+          user_id: subscriber.slack_user_id,
+          total_minutes: Math.floor(totalSeconds / 60),
+          total_seconds: totalSeconds,
+          projects: projectStats
+        });
+      }
+    } catch (error) {
+      console.error(`Error processing summaries for user ${subscriber.slack_user_id}:`, error);
+    }
+  }
+
+  // Sort and get top 10
+  const leaderboard = userStats
+    .sort((a, b) => b.total_minutes - a.total_minutes)
+    .slice(0, 10);
+
+  if (leaderboard.length === 0) {
+    return `No coding activity found for ${period === 'week' ? 'this week' : 'today'}.`;
+  }
+
+  // Format the leaderboard message
+  const timeframe = period === 'week' ? 'This Week' : 'Today';
+  let message = `🏆 *Coding Leaderboard - ${timeframe}*\n\n`;
+  
+  leaderboard.forEach((entry, index) => {
+    const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : '▫️';
+    const hours = Math.floor(entry.total_minutes / 60);
+    const minutes = entry.total_minutes % 60;
+    const timeStr = hours > 0 ? 
+      `${hours}h ${minutes}m` : 
+      `${minutes}m`;
+
+    // Format project breakdown with languages
+    const projectBreakdown = Array.from(entry.projects.entries())
+      .sort((a, b) => b[1].seconds - a[1].seconds)
+      .filter(([_, stats]) => Math.floor(stats.seconds / 60) > 0) // Filter out 0-minute projects
+      .map(([project, stats]) => {
+        const minutes = Math.floor(stats.seconds / 60);
+        // Filter out unknown and AUTO_DETECTED languages
+        const mainLang = stats.languages
+          .filter(lang => !['unknown', 'AUTO_DETECTED', 'PLAIN_TEXT', 'Text'].includes(lang))
+          .sort()[0] || '';
+        
+        return `${project} [${mainLang}]: ${minutes}m`;
+      })
+      .join(' + ');
+    
+    message += `${medal} <@${entry.user_id}>: ${timeStr} → ${projectBreakdown}\n`;
+  });
+
+  return message;
+}
+
 async function fetchUserSummary(apiKey) {
   try {
     const response = await fetch('https://waka.hackclub.com/api/summary?interval=all_time&recompute=true', {
       headers: {
         'accept': 'application/json',
-        'Authorization': `Bearer ${Buffer.from(apiKey).toString('base64')}`
+        'Authorization': `Basic ${Buffer.from(apiKey).toString('base64')}`
       }
     });
     
@@ -587,6 +775,19 @@ async function processNewHeartbeats(heartbeats) {
     console.log(`Fetching summary for user ${userId}`);
     const summary = await fetchUserSummary(apiKey);
     if (summary) {
+      // Store the summary in the database
+      try {
+        await prisma.userSummary.create({
+          data: {
+            user_id: userId,
+            summary_data: JSON.stringify(summary)
+          }
+        });
+        console.log(`Stored summary for user ${userId}`);
+      } catch (error) {
+        console.error(`Failed to store summary for user ${userId}:`, error);
+      }
+
       console.log(`Checking coding milestones for user ${userId}`);
       await checkAndNotifyCodingMilestones(userId, summary);
       console.log(`Finished processing user ${userId}`);
