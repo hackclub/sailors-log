@@ -2,12 +2,88 @@ import { hackatime, prisma, getUserApiKey } from './db.js';
 import slackServer from './slack.js';
 
 // Load environment variables from .env file
-const envPath = process.env.ENV_PATH || '.env';
-await import('dotenv').then(dotenv => dotenv.config({ path: envPath }));
+await import('dotenv').then(dotenv => dotenv.config());
 
 // Constants
 const POLL_INTERVAL = 5 * 1000; // 5 seconds
 const RETENTION_HOURS = 24;
+const NOTIFICATION_PERIOD_SECONDS = parseInt(process.env.NOTIFICATION_PERIOD_SECONDS) || 3600; // Default 1 hour
+
+// Add kudos messages back at the top
+const KUDOS_MESSAGES = [
+  "Great work!",
+  "Nice job!", 
+  "Amazing!",
+  "Fantastic!",
+  "Excellent!",
+  "Awesome!",
+  "Well done!",
+];
+
+function getRandomKudos() {
+  return KUDOS_MESSAGES[Math.floor(Math.random() * KUDOS_MESSAGES.length)];
+}
+
+async function sendSlackNotification(channel, message) {
+  try {
+    const response = await fetch('https://slack.com/api/chat.postMessage', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.SLACK_BOT_TOKEN}`
+      },
+      body: JSON.stringify({
+        channel,
+        text: message,
+        unfurl_links: false,
+        unfurl_media: false
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const result = await response.json();
+    if (!result.ok) {
+      throw new Error(`Slack API error: ${result.error}`);
+    }
+  } catch (error) {
+    console.error('Error sending Slack notification:', error);
+  }
+}
+
+async function notifyChannelsAboutCoding(userId, project, totalSeconds) {
+  const preferences = await prisma.slackNotificationPreference.findMany({
+    where: {
+      slack_user_id: userId,
+      enabled: true
+    }
+  });
+
+  if (preferences.length === 0) {
+    return;
+  }
+
+  const totalHours = Math.floor(totalSeconds / 3600);
+  const intervalMinutes = Math.floor(NOTIFICATION_PERIOD_SECONDS / 60);
+  
+  let timeText;
+  if (intervalMinutes >= 60) {
+    const hours = intervalMinutes / 60;
+    timeText = hours === 1 ? "1 more hour" : `${hours} more hours`;
+  } else {
+    timeText = intervalMinutes === 1 ? "1 more minute" : `${intervalMinutes} more minutes`;
+  }
+  
+  const kudos = getRandomKudos();
+  const message = `⛵️ <@${userId}> just coded ${timeText} on *${project}* (total: ${totalHours}h). ${kudos}`;
+
+  // Send notification to each enabled channel
+  for (const pref of preferences) {
+    await sendSlackNotification(pref.slack_channel_id, message);
+  }
+}
 
 async function cleanupOldHeartbeats() {
   const cutoff = new Date(Date.now() - RETENTION_HOURS * 60 * 60 * 1000);
@@ -210,7 +286,7 @@ async function processNewHeartbeats(heartbeats) {
     console.log(`Processing ${beats.length} heartbeats for user ${userId}`);
     
     // Auto-subscribe user to default channel if not already subscribed
-    const defaultChannel = process.env.SLACK_CHANNEL_HEIDIS_SPYGLASS;
+    const defaultChannel = process.env.SLACK_CHANNEL_SAILORSLOG;
     if (defaultChannel) {
       const existingPref = await prisma.slackNotificationPreference.findUnique({
         where: {
@@ -256,6 +332,54 @@ async function processNewHeartbeats(heartbeats) {
           }
         });
         console.log(`Stored summary for user ${userId}`);
+
+        // Check each project for notification threshold
+        if (summary.projects) {
+          for (const project of summary.projects) {
+            // Get last notification for this project
+            const lastNotification = await prisma.projectNotification.findUnique({
+              where: {
+                user_id_project_name: {
+                  user_id: userId,
+                  project_name: project.key
+                }
+              }
+            });
+
+            if (!lastNotification) {
+              // First time seeing this project, create initial record
+              await prisma.projectNotification.create({
+                data: {
+                  user_id: userId,
+                  project_name: project.key,
+                  last_notified_at: new Date(),
+                  last_total_seconds: project.total
+                }
+              });
+              continue;
+            }
+
+            // Calculate time since last notification
+            const secondsSinceNotification = project.total - lastNotification.last_total_seconds;
+            
+            // If they've coded for at least one notification period
+            if (secondsSinceNotification >= NOTIFICATION_PERIOD_SECONDS) {
+              // Send notification
+              await notifyChannelsAboutCoding(userId, project.key, project.total);
+
+              // Update notification record
+              await prisma.projectNotification.update({
+                where: {
+                  id: lastNotification.id
+                },
+                data: {
+                  last_notified_at: new Date(),
+                  last_total_seconds: project.total
+                }
+              });
+            }
+          }
+        }
       } catch (error) {
         console.error(`Failed to store summary for user ${userId}:`, error);
       }
