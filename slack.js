@@ -1,16 +1,178 @@
 import { Pool } from 'pg';
 import { PrismaClient } from '@prisma/client';
 
-// Load environment variables from .env file
-const envPath = process.env.ENV_PATH || '.env';
-await import('dotenv').then(dotenv => dotenv.config({ path: envPath }));
-
 // Initialize databases
 const hackatime = new Pool({ connectionString: process.env.HACKATIME_DATABASE_URL });
 const prisma = new PrismaClient();
 const port = process.env.PORT || 3000;
 
-// Verify Slack requests are genuine using signing secret
+async function getUserApiKey(userId) {
+  const client = await hackatime.connect();
+  try {
+    const { rows } = await client.query(
+      'SELECT api_key FROM users WHERE id = $1',
+      [userId]
+    );
+    return rows[0]?.api_key;
+  } finally {
+    client.release();
+  }
+}
+
+async function getLeaderboard(channel_id, period = 'day') {
+  const now = new Date();
+  const startDate = new Date();
+  
+  if (period === 'week') {
+    startDate.setDate(startDate.getDate() - 7);
+  } else {
+    startDate.setHours(0, 0, 0, 0); // Start of today
+  }
+
+  // Get all users subscribed to this channel
+  const subscribers = await prisma.slackNotificationPreference.findMany({
+    where: {
+      slack_channel_id: channel_id,
+      enabled: true
+    },
+    select: {
+      slack_user_id: true
+    }
+  });
+
+  // Get latest summaries for all users
+  const userStats = [];
+  
+  for (const subscriber of subscribers) {
+    try {
+      // Get all summaries for this user in the period
+      const summaries = await prisma.userSummary.findMany({
+        where: {
+          user_id: subscriber.slack_user_id,
+          created_at: {
+            gte: startDate,
+            lte: now
+          }
+        },
+        orderBy: {
+          created_at: 'asc'
+        }
+      });
+
+      if (summaries.length < 2) {
+        console.log(`Not enough summaries found for user ${subscriber.slack_user_id}`);
+        continue;
+      }
+
+      // Find min and max total seconds
+      let minSeconds = Infinity;
+      let maxSeconds = 0;
+      let minSummary;
+      let maxSummary;
+
+      summaries.forEach(summary => {
+        const data = JSON.parse(summary.summary_data);
+        const totalSeconds = data.projects?.reduce((total, project) => total + (project.total || 0), 0) || 0;
+        if (totalSeconds < minSeconds) {
+          minSeconds = totalSeconds;
+          minSummary = data;
+        }
+        if (totalSeconds > maxSeconds) {
+          maxSeconds = totalSeconds;
+          maxSummary = data;
+        }
+      });
+
+      const totalSeconds = maxSeconds - minSeconds;
+
+      // Calculate project and language differences
+      const projectStats = new Map();
+      if (maxSummary?.projects && minSummary?.projects) {
+        const minProjects = new Map(minSummary.projects.map(p => [p.key, p.total || 0]));
+        const minLanguages = new Map(minSummary.languages?.map(l => [l.key, l.total || 0]) || []);
+        
+        // Group languages by project based on max summary
+        const projectLanguages = new Map();
+        maxSummary.languages?.forEach(lang => {
+          const diff = (lang.total || 0) - (minLanguages.get(lang.key) || 0);
+          if (diff > 0) {
+            maxSummary.projects.forEach(proj => {
+              if (!projectLanguages.has(proj.key)) {
+                projectLanguages.set(proj.key, new Set());
+              }
+              projectLanguages.get(proj.key).add(lang.key);
+            });
+          }
+        });
+
+        // Calculate project times and associate languages
+        maxSummary.projects.forEach(p => {
+          const diff = (p.total || 0) - (minProjects.get(p.key) || 0);
+          if (diff > 0) {
+            projectStats.set(p.key, {
+              seconds: diff,
+              languages: Array.from(projectLanguages.get(p.key) || []).sort()
+            });
+          }
+        });
+      }
+
+      // Only add users who have coded during this period
+      if (totalSeconds > 0) {
+        userStats.push({
+          user_id: subscriber.slack_user_id,
+          total_minutes: Math.floor(totalSeconds / 60),
+          total_seconds: totalSeconds,
+          projects: projectStats
+        });
+      }
+    } catch (error) {
+      console.error(`Error processing summaries for user ${subscriber.slack_user_id}:`, error);
+    }
+  }
+
+  // Sort and get top 10
+  const leaderboard = userStats
+    .sort((a, b) => b.total_minutes - a.total_minutes)
+    .slice(0, 10);
+
+  if (leaderboard.length === 0) {
+    return `No coding activity found for ${period === 'week' ? 'this week' : 'today'}.`;
+  }
+
+  // Format the leaderboard message
+  const timeframe = period === 'week' ? 'This Week' : 'Today';
+  let message = `🏆 *Coding Leaderboard - ${timeframe}*\n\n`;
+  
+  leaderboard.forEach((entry, index) => {
+    const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : '▫️';
+    const hours = Math.floor(entry.total_minutes / 60);
+    const minutes = entry.total_minutes % 60;
+    const timeStr = hours > 0 ? 
+      `${hours}h ${minutes}m` : 
+      `${minutes}m`;
+
+    // Format project breakdown with languages
+    const projectBreakdown = Array.from(entry.projects.entries())
+      .sort((a, b) => b[1].seconds - a[1].seconds)
+      .filter(([_, stats]) => Math.floor(stats.seconds / 60) > 0) // Filter out 0-minute projects
+      .map(([project, stats]) => {
+        const minutes = Math.floor(stats.seconds / 60);
+        // Filter out unknown and AUTO_DETECTED languages
+        const mainLang = stats.languages
+          .filter(lang => !['unknown', 'AUTO_DETECTED', 'PLAIN_TEXT', 'Text'].includes(lang))
+          .sort()[0] || '';
+        
+        return `${project} [${mainLang}]: ${minutes}m`;
+      })
+      .join(' + ');
+    
+    message += `${medal} <@${entry.user_id}>: ${timeStr} → ${projectBreakdown}\n`;
+  });
+
+  return message;
+}
+
 async function verifySlackRequest(req) {
   const slackSigningSecret = process.env.SLACK_SIGNING_SECRET;
   if (!slackSigningSecret) {
@@ -66,110 +228,6 @@ async function verifySlackRequest(req) {
   }
 
   return formData;
-}
-
-async function getUserApiKey(userId) {
-  const client = await hackatime.connect();
-  try {
-    const { rows } = await client.query(
-      'SELECT api_key FROM users WHERE id = $1',
-      [userId]
-    );
-    return rows[0]?.api_key;
-  } finally {
-    client.release();
-  }
-}
-
-async function getLeaderboard(channel_id, period = 'day') {
-  const now = new Date();
-  const startDate = new Date();
-  
-  if (period === 'week') {
-    startDate.setDate(startDate.getDate() - 7);
-  } else {
-    startDate.setHours(0, 0, 0, 0); // Start of today
-  }
-
-  // Get all users subscribed to this channel
-  const subscribers = await prisma.slackNotificationPreference.findMany({
-    where: {
-      slack_channel_id: channel_id,
-      enabled: true
-    },
-    select: {
-      slack_user_id: true
-    }
-  });
-
-  // Get API keys and summaries for all users
-  const userStats = [];
-  
-  for (const subscriber of subscribers) {
-    const apiKey = await getUserApiKey(subscriber.slack_user_id);
-    if (!apiKey) {
-      console.log(`No API key found for user ${subscriber.slack_user_id}`);
-      continue;
-    }
-
-    try {
-      const range = period === 'week' ? 'last_7_days' : 'day';
-      console.log(apiKey)
-      const response = await fetch(`https://waka.hackclub.com/api/v1/users/current/summaries?range=${range}`, {
-        headers: {
-          'accept': 'application/json',
-          'Authorization': `Bearer ${Buffer.from(apiKey).toString('base64')}`
-        }
-      });
-      
-      if (!response.ok) {
-        console.error(`API request failed for user ${subscriber.slack_user_id} with status ${response.status}`);
-        continue;
-      }
-      
-      const data = await response.json();
-      
-      // Calculate total time and lines
-      const totalSeconds = data.reduce((total, day) => total + (day.grand_total.total_seconds || 0), 0);
-      const totalLines = data.reduce((total, day) => {
-        return total + day.languages.reduce((langTotal, lang) => langTotal + (lang.total_lines || 0), 0);
-      }, 0);
-
-      userStats.push({
-        user_id: subscriber.slack_user_id,
-        total_minutes: Math.floor(totalSeconds / 60),
-        lines: totalLines
-      });
-    } catch (error) {
-      console.error(`Error fetching summary for user ${subscriber.slack_user_id}:`, error);
-    }
-  }
-
-  // Sort and get top 10
-  const leaderboard = userStats
-    .sort((a, b) => b.total_minutes - a.total_minutes)
-    .slice(0, 10);
-
-  if (leaderboard.length === 0) {
-    return `No coding activity found for ${period === 'week' ? 'this week' : 'today'}.`;
-  }
-
-  // Format the leaderboard message
-  const timeframe = period === 'week' ? 'This Week' : 'Today';
-  let message = `🏆 *Coding Leaderboard - ${timeframe}*\n\n`;
-  
-  leaderboard.forEach((entry, index) => {
-    const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : '▫️';
-    const hours = Math.floor(entry.total_minutes / 60);
-    const minutes = entry.total_minutes % 60;
-    const timeStr = hours > 0 ? 
-      `${hours}h ${minutes}m` : 
-      `${minutes}m`;
-    
-    message += `${medal} <@${entry.user_id}>: ${timeStr} (${entry.lines.toLocaleString()} lines)\n`;
-  });
-
-  return message;
 }
 
 async function handleSlashCommand(formData) {
