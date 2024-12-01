@@ -2,5 +2,10 @@
   "dependencies": { "@prisma/client": "^5.22.0", "dotenv": "^16.4.5", "pg": "^8.13.1" },
   "devDependencies": {
     "prisma": "^5.22.0"
+  },
+  "scripts": {
+    "dev": "bun run index.js",
+    "start": "cp prisma/schema.production.prisma prisma/schema.prisma && bunx prisma generate && bun run index.js",
+    "prisma:deploy": "cp prisma/schema.production.prisma prisma/schema.prisma && bunx prisma migrate deploy"
   }
 }

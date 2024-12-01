@@ -1,0 +1,91 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model SyncedHeartbeat {
+  id                String    @id @map("id")
+  user_id           String
+  entity            String?
+  type              String?
+  category          String?
+  project           String?
+  branch            String?
+  language          String?
+  is_write          Boolean   @default(false)
+  editor            String?
+  operating_system  String?
+  machine           String?
+  user_agent        String?
+  time              DateTime
+  hash              String?
+  origin            String?
+  origin_id         String?
+  created_at        DateTime
+  project_root_count Int?
+  line_additions    Int?
+  line_deletions    Int?
+  lines             Int?
+  line_number       Int?     @map("line_number")
+  cursor_position   Int?     @map("cursor_position")
+  dependencies      String?
+
+  @@index([created_at])
+  @@index([user_id])
+  @@index([time])
+}
+
+model ProjectNotification {
+  id                String    @id @default(cuid())
+  user_id           String    @map("user_id")
+  project_name      String    @map("project_name")
+  last_notified_at  DateTime  @map("last_notified_at")
+  last_total_seconds Int      @map("last_total_seconds")
+  created_at        DateTime  @default(now()) @map("created_at")
+  updated_at        DateTime  @updatedAt @map("updated_at")
+
+  @@unique([user_id, project_name])
+  @@index([user_id])
+  @@index([last_notified_at])
+}
+
+model SlackNotificationPreference {
+  id                String    @id @default(cuid())
+  slack_user_id     String    @map("slack_user_id")
+  slack_channel_id  String    @map("slack_channel_id")
+  enabled           Boolean   @default(true)
+  created_at        DateTime  @default(now())
+  updated_at        DateTime  @updatedAt
+
+  @@unique([slack_user_id, slack_channel_id])
+  @@index([slack_user_id])
+  @@index([slack_channel_id])
+}
+
+model UserCodingTime {
+  id                String    @id @default(cuid())
+  user_id           String    @map("user_id")
+  date              DateTime  @map("date")
+  total_seconds     Int       @map("total_seconds")
+  created_at        DateTime  @default(now()) @map("created_at")
+  updated_at        DateTime  @updatedAt @map("updated_at")
+
+  @@unique([user_id, date])
+  @@index([user_id])
+  @@index([date])
+}
+
+model UserSummary {
+  id                String    @id @default(cuid())
+  user_id           String    @map("user_id")
+  summary_data      String    @map("summary_data") // JSON string of the summary response
+  created_at        DateTime  @default(now()) @map("created_at")
+  updated_at        DateTime  @updatedAt @map("updated_at")
+
+  @@index([user_id])
+  @@index([created_at])
+} 
