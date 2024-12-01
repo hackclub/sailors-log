@@ -7,21 +7,6 @@ datasource db {
   url      = "file:./dev.db"
 }
 
-model LastHeartbeat {
-  id                Int      @id @default(autoincrement())
-  heartbeatCreatedAt DateTime @map("heartbeat_created_at")
-  updatedAt         DateTime @updatedAt
-}
-
-model CodingActivityAlert {
-  id                Int      @id @default(autoincrement())
-  hackatimeUserId   String   @unique @map("hackatime_user_id")
-  lastTotalMinutes  Int      @default(0) @map("last_total_minutes")
-  lastCheckAt       DateTime @default(now()) @map("last_check_at")
-  createdAt         DateTime @default(now()) @map("created_at")
-  updatedAt         DateTime @updatedAt
-}
-
 model SyncedHeartbeat {
   id                String    @id @map("id")
   user_id           String
@@ -48,32 +33,10 @@ model SyncedHeartbeat {
   line_number       Int?     @map("line_number")
   cursor_position   Int?     @map("cursor_position")
   dependencies      String?
-  session           Session?  @relation(fields: [session_id], references: [id])
-  session_id        String?
 
   @@index([created_at])
   @@index([user_id])
   @@index([time])
-}
-
-model Session {
-  id                String    @id @default(cuid())
-  user_id           String
-  start_time        DateTime  @map("start_time")
-  end_time          DateTime? @map("end_time")
-  minutes           Float     @default(0)
-  is_active         Boolean   @default(true)
-  projects          String    // JSON array
-  languages         String    // JSON array
-  editors           String    // JSON array
-  heartbeats        SyncedHeartbeat[]
-  heartbeats_count  Int       @default(0)
-  created_at        DateTime  @default(now())
-  updated_at        DateTime  @updatedAt
-
-  @@index([user_id])
-  @@index([start_time])
-  @@index([is_active])
 }
 
 // Add your models here 
