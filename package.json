@@ -5,6 +5,6 @@
   },
   "scripts": {
     "dev": "bun run index.js",
-    "production": "bun i && bun prisma generate && bun prisma migrate deploy && bun run index.js",
+    "production": "bun i && bun prisma generate && bun prisma migrate deploy && bun run index.js"
   }
 }
