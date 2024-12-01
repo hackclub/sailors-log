@@ -1,23 +1,6 @@
-import { Pool } from 'pg';
-import { PrismaClient } from '@prisma/client';
+import { prisma, getUserApiKey } from './db.js';
 
-// Initialize databases
-const hackatime = new Pool({ connectionString: process.env.HACKATIME_DATABASE_URL });
-const prisma = new PrismaClient();
 const port = process.env.PORT || 3000;
-
-async function getUserApiKey(userId) {
-  const client = await hackatime.connect();
-  try {
-    const { rows } = await client.query(
-      'SELECT api_key FROM users WHERE id = $1',
-      [userId]
-    );
-    return rows[0]?.api_key;
-  } finally {
-    client.release();
-  }
-}
 
 async function getLeaderboard(channel_id, period = 'day') {
   const now = new Date();
@@ -395,4 +378,4 @@ const server = Bun.serve({
   },
 });
 
-console.log(`Slack command server listening on port ${server.port}`); 
+export default server; 

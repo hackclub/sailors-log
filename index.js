@@ -1,4 +1,5 @@
 import { hackatime, prisma, getUserApiKey } from './db.js';
+import slackServer from './slack.js';
 
 // Load environment variables from .env file
 const envPath = process.env.ENV_PATH || '.env';
@@ -126,7 +127,7 @@ async function getHeartbeats() {
       console.log('No heartbeats found, fetching 500 most recent heartbeats');
     } else if (lastHeartbeat.created_at < cutoffTime) {
       // If last heartbeat is too old, get recent ones
-      startTime = new Date(Date.now() - POLL_INTERVAL);
+      const startTime = new Date(Date.now() - POLL_INTERVAL);
       query = {
         text: 'SELECT * FROM heartbeats WHERE created_at > $1 ORDER BY created_at DESC',
         values: [startTime]
@@ -263,11 +264,23 @@ async function processNewHeartbeats(heartbeats) {
   console.log('Finished processing all heartbeats');
 }
 
+console.log('Starting Heidi\'s Spyglass...');
+
+// Log that Slack server is ready
+console.log(`Slack server listening on port ${slackServer.port}`);
+
 // Start heartbeat polling
 console.log(`Starting heartbeat polling every ${POLL_INTERVAL/1000} seconds...`);
-
-// Initial poll
-await pollHeartbeats();
-
-// Set up regular polling
+await pollHeartbeats(); // Initial poll
 const pollInterval = setInterval(pollHeartbeats, POLL_INTERVAL);
+
+// Handle graceful shutdown
+process.on('SIGINT', async () => {
+  console.log('\nShutting down...');
+  clearInterval(pollInterval);
+  await Promise.all([
+    prisma.$disconnect(),
+    hackatime.end()
+  ]);
+  process.exit(0);
+});
