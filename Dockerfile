@@ -25,4 +25,6 @@ RUN bun install
 COPY src src
 # copy anything else over that's necessary
 
+EXPOSE 3000
+
 CMD ["bun", "production"]
