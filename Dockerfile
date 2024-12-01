@@ -22,7 +22,7 @@ COPY prisma prisma
 RUN bun install
 # I chose to prisma generate & deploy during start phase
 
-COPY src src
+COPY . .
 # copy anything else over that's necessary
 
 EXPOSE 3000
