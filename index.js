@@ -264,7 +264,7 @@ async function processNewHeartbeats(heartbeats) {
   console.log('Finished processing all heartbeats');
 }
 
-console.log('Starting Heidi\'s Spyglass...');
+console.log('Starting Sailor\'s Log...');
 
 // Log that Slack server is ready
 console.log(`Slack server listening on port ${slackServer.port}`);
@@ -276,7 +276,7 @@ const pollInterval = setInterval(pollHeartbeats, POLL_INTERVAL);
 
 // Handle graceful shutdown
 process.on('SIGINT', async () => {
-  console.log('\nShutting down...');
+  console.log('\nShutting down Sailor\'s Log...');
   clearInterval(pollInterval);
   await Promise.all([
     prisma.$disconnect(),

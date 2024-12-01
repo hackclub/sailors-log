@@ -125,7 +125,7 @@ async function getLeaderboard(channel_id, period = 'day') {
 
   // Format the leaderboard message
   const timeframe = period === 'week' ? 'This Week' : 'Today';
-  let message = `🏆 *Coding Leaderboard - ${timeframe}*\n\n`;
+  let message = `⛵ *Sailor's Log - ${timeframe}*\n\n`;
   
   leaderboard.forEach((entry, index) => {
     const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : '▫️';
@@ -223,7 +223,7 @@ async function handleSlashCommand(formData) {
   console.log('Received command:', { command, text, user_id, channel_id });
 
   // Verify this is our command
-  if (command !== '/spyglass') {
+  if (command !== '/sailorslog') {
     return new Response(JSON.stringify({ error: 'Invalid command' }), {
       status: 400,
       headers: { 'Content-Type': 'application/json' }
@@ -237,12 +237,12 @@ async function handleSlashCommand(formData) {
   if (!action) {
     return new Response(JSON.stringify({
       response_type: 'ephemeral',
-      text: 'Usage:\n' +
-           '• `/spyglass on` - Enable notifications\n' +
-           '• `/spyglass off` - Disable notifications\n' +
-           '• `/spyglass status` - Check notification status\n' +
-           '• `/spyglass leaderboard` - Show today\'s coding leaderboard\n' +
-           '• `/spyglass leaderboard week` - Show this week\'s coding leaderboard'
+      text: 'Welcome to Sailor\'s Log! Usage:\n' +
+           '• `/sailorslog on` - Enable notifications\n' +
+           '• `/sailorslog off` - Disable notifications\n' +
+           '• `/sailorslog status` - Check notification status\n' +
+           '• `/sailorslog leaderboard` - Show today\'s coding leaderboard\n' +
+           '• `/sailorslog leaderboard week` - Show this week\'s coding leaderboard'
     }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' }
@@ -328,12 +328,12 @@ async function handleSlashCommand(formData) {
     // If we get here, the command is unknown
     return new Response(JSON.stringify({
       response_type: 'ephemeral',
-      text: 'Usage:\n' +
-           '• `/spyglass on` - Enable notifications\n' +
-           '• `/spyglass off` - Disable notifications\n' +
-           '• `/spyglass status` - Check notification status\n' +
-           '• `/spyglass leaderboard` - Show today\'s coding leaderboard\n' +
-           '• `/spyglass leaderboard week` - Show this week\'s coding leaderboard'
+      text: 'Welcome to Sailor\'s Log! Usage:\n' +
+           '• `/sailorslog on` - Enable notifications\n' +
+           '• `/sailorslog off` - Disable notifications\n' +
+           '• `/sailorslog status` - Check notification status\n' +
+           '• `/sailorslog leaderboard` - Show today\'s coding leaderboard\n' +
+           '• `/sailorslog leaderboard week` - Show this week\'s coding leaderboard'
     }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' }
