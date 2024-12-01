@@ -1,10 +1,10 @@
 -- CreateTable
 CREATE TABLE "UserSummary" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT PRIMARY KEY,
     "user_id" TEXT NOT NULL,
     "summary_data" TEXT NOT NULL,
-    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" DATETIME NOT NULL
+    "created_at" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP NOT NULL
 );
 
 -- CreateIndex

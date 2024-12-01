@@ -1,6 +1,6 @@
 -- CreateTable
 CREATE TABLE "SyncedHeartbeat" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT PRIMARY KEY,
     "user_id" TEXT NOT NULL,
     "entity" TEXT,
     "type" TEXT,
@@ -13,11 +13,11 @@ CREATE TABLE "SyncedHeartbeat" (
     "operating_system" TEXT,
     "machine" TEXT,
     "user_agent" TEXT,
-    "time" DATETIME NOT NULL,
+    "time" TIMESTAMP NOT NULL,
     "hash" TEXT,
     "origin" TEXT,
     "origin_id" TEXT,
-    "created_at" DATETIME NOT NULL,
+    "created_at" TIMESTAMP NOT NULL,
     "project_root_count" INTEGER,
     "line_additions" INTEGER,
     "line_deletions" INTEGER,
@@ -29,33 +29,33 @@ CREATE TABLE "SyncedHeartbeat" (
 
 -- CreateTable
 CREATE TABLE "ProjectNotification" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT PRIMARY KEY,
     "user_id" TEXT NOT NULL,
     "project_name" TEXT NOT NULL,
-    "last_notified_at" DATETIME NOT NULL,
+    "last_notified_at" TIMESTAMP NOT NULL,
     "last_total_seconds" INTEGER NOT NULL,
-    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" DATETIME NOT NULL
+    "created_at" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP NOT NULL
 );
 
 -- CreateTable
 CREATE TABLE "SlackNotificationPreference" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT PRIMARY KEY,
     "slack_user_id" TEXT NOT NULL,
     "slack_channel_id" TEXT NOT NULL,
     "enabled" BOOLEAN NOT NULL DEFAULT true,
-    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" DATETIME NOT NULL
+    "created_at" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP NOT NULL
 );
 
 -- CreateTable
 CREATE TABLE "UserCodingTime" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT PRIMARY KEY,
     "user_id" TEXT NOT NULL,
-    "date" DATETIME NOT NULL,
+    "date" TIMESTAMP NOT NULL,
     "total_seconds" INTEGER NOT NULL,
-    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" DATETIME NOT NULL
+    "created_at" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP NOT NULL
 );
 
 -- CreateIndex
