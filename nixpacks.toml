@@ -1,3 +1,6 @@
 [phases.setup]
-  nixPkgs = ['openssl', 'bun', 'postgresql']
+  # https://github.com/NixOS/nixpkgs/commits/master/pkgs/development/web/bun/default.nix
+  nixpkgsArchive = 'd05592ea7e9656648093dfe0e817819486bd5054' # https://github.com/NixOS/nixpkgs/commit/d05592ea7e9656648093dfe0e817819486bd5054
+  
+  nixPkgs = ['...', 'openssl', 'bun']
   nixLibs = ['openssl']
