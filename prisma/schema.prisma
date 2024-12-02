@@ -69,7 +69,7 @@ model SlackNotificationPreference {
 model UserCodingTime {
   id                String    @id @default(cuid())
   user_id           String    @map("user_id")
-  date              DateTime  @map("date")
+  date              DateTime  @db.Date @map("date")
   total_seconds     Int       @map("total_seconds")
   created_at        DateTime  @default(now()) @map("created_at")
   updated_at        DateTime  @updatedAt @map("updated_at")
