@@ -1,7 +1,5 @@
 
-Check it out in [#high-seas-kudos](https://app.slack.com/client/T0266FRGM/C082ZDLHCSJ) on the Hack Club Slack!
-
-Run `/sailorslog on` in any channel to start.
+Check it out in [#high-seas-kudos](https://app.slack.com/client/T0266FRGM/C082ZDLHCSJ) on the Hack Club Slack! Run `/sailorslog on` in any channel to start.
 
 Every time you reach an hour coding on a project, `@Sailor's Log` will post a message like this to congratulate you:
 
