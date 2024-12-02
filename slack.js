@@ -2,7 +2,7 @@ import { prisma, getUserApiKey } from './db.js';
 
 const port = process.env.PORT || 3000;
 
-async function getLeaderboard(channel_id, period = 'day') {
+async function getLeaderboard(channel_id, period = 'day', limit = 10) {
   const now = new Date();
   const startDate = new Date();
   
@@ -114,10 +114,10 @@ async function getLeaderboard(channel_id, period = 'day') {
     }
   }
 
-  // Sort and get top 10
+  // Sort and get top N users
   const leaderboard = userStats
     .sort((a, b) => b.total_minutes - a.total_minutes)
-    .slice(0, 10);
+    .slice(0, limit === 'all' ? undefined : limit);
 
   if (leaderboard.length === 0) {
     return `No coding activity found for ${period === 'week' ? 'this week' : 'today'}.`;
@@ -231,7 +231,8 @@ async function handleSlashCommand(formData) {
   }
 
   // Parse the command
-  const action = text?.trim().toLowerCase();
+  const args = text?.trim().toLowerCase().split(/\s+/) || [];
+  const action = args[0];
 
   // Handle empty command
   if (!action) {
@@ -241,8 +242,12 @@ async function handleSlashCommand(formData) {
            '• `/sailorslog on` - Enable notifications\n' +
            '• `/sailorslog off` - Disable notifications\n' +
            '• `/sailorslog status` - Check notification status\n' +
-           '• `/sailorslog leaderboard` - Show today\'s coding leaderboard\n' +
-           '• `/sailorslog leaderboard week` - Show this week\'s coding leaderboard'
+           '• `/sailorslog leaderboard [day|week] [N|all]` - Show coding leaderboard\n' +
+           '  Examples:\n' +
+           '  • `/sailorslog leaderboard` - Show today\'s top 10\n' +
+           '  • `/sailorslog leaderboard week` - Show this week\'s top 10\n' +
+           '  • `/sailorslog leaderboard day 100` - Show today\'s top 100\n' +
+           '  • `/sailorslog leaderboard week all` - Show everyone this week'
     }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' }
@@ -251,11 +256,31 @@ async function handleSlashCommand(formData) {
 
   try {
     // Handle leaderboard command
-    if (action === 'leaderboard' || action === 'leaderboard week') {
-      console.log('Processing leaderboard command:', action);
-      const period = action === 'leaderboard week' ? 'week' : 'day';
-      console.log('Fetching leaderboard for period:', period);
-      const message = await getLeaderboard(channel_id, period);
+    if (action === 'leaderboard') {
+      console.log('Processing leaderboard command:', args);
+      let period = 'day';
+      let limit = 10;
+
+      // Check for period argument
+      if (args[1] === 'week') {
+        period = 'week';
+      }
+
+      // Check for limit argument
+      if (args.length >= 2 && args[args.length - 1] !== 'week' && args[args.length - 1] !== 'day') {
+        const lastArg = args[args.length - 1];
+        if (lastArg === 'all') {
+          limit = 'all';
+        } else {
+          const parsedLimit = parseInt(lastArg, 10);
+          if (!isNaN(parsedLimit) && parsedLimit > 0) {
+            limit = parsedLimit;
+          }
+        }
+      }
+
+      console.log('Fetching leaderboard for period:', period, 'with limit:', limit);
+      const message = await getLeaderboard(channel_id, period, limit);
       
       return new Response(JSON.stringify({
         response_type: 'in_channel', // Make the response visible to everyone
@@ -332,8 +357,12 @@ async function handleSlashCommand(formData) {
            '• `/sailorslog on` - Enable notifications\n' +
            '• `/sailorslog off` - Disable notifications\n' +
            '• `/sailorslog status` - Check notification status\n' +
-           '• `/sailorslog leaderboard` - Show today\'s coding leaderboard\n' +
-           '• `/sailorslog leaderboard week` - Show this week\'s coding leaderboard'
+           '• `/sailorslog leaderboard [day|week] [N|all]` - Show coding leaderboard\n' +
+           '  Examples:\n' +
+           '  • `/sailorslog leaderboard` - Show today\'s top 10\n' +
+           '  • `/sailorslog leaderboard week` - Show this week\'s top 10\n' +
+           '  • `/sailorslog leaderboard day 100` - Show today\'s top 100\n' +
+           '  • `/sailorslog leaderboard week all` - Show everyone this week'
     }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' }
