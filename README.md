@@ -1,4 +1,3 @@
-# Sailor's Log: Celebrate your progress on projects!
 
 Check it out in [#high-seas-kudos](https://app.slack.com/client/T0266FRGM/C082ZDLHCSJ) on the Hack Club Slack!
 
@@ -9,6 +8,8 @@ Every time you reach an hour coding on a project, `@Sailor's Log` will post a me
 ![](https://cloud-aq7yi0h8m-hack-club-bot.vercel.app/0screenshot_2024-12-01_at_11.25.49___pm.png)
 
 You can also see a leaderboard of everyone in the current channel by running `/sailorslog leaderboard`.
+
+# Sailor's Log
 
 ## User Flow
 
