@@ -3,7 +3,13 @@ import { PrismaClient } from '@prisma/client';
 
 // Initialize databases
 export const hackatime = new Pool({ connectionString: process.env.HACKATIME_DATABASE_URL });
-export const prisma = new PrismaClient();
+export const prisma = new PrismaClient({
+  datasources: {
+    db: {
+      url: process.env.DATABASE_URL,
+    },
+  },
+});
 
 export async function getUserApiKey(userId) {
   const client = await hackatime.connect();
