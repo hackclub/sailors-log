@@ -285,14 +285,18 @@ async function processNewHeartbeats(heartbeats) {
   for (const [userId, beats] of Object.entries(userHeartbeats)) {
     console.log(`Processing ${beats.length} heartbeats for user ${userId}`);
     
-    // Auto-subscribe user to default channel if not already subscribed
-    const defaultChannel = process.env.SLACK_CHANNEL_SAILORSLOG;
-    if (defaultChannel) {
+    // Auto-subscribe user to default channels if not already subscribed
+    const defaultChannels = [
+      process.env.SLACK_CHANNEL_SAILORSLOG,
+      process.env.LOG_EVERYTHING_SLACK_CHANNEL_ID
+    ].filter(Boolean);
+
+    for (const channelId of defaultChannels) {
       const existingPref = await prisma.slackNotificationPreference.findUnique({
         where: {
           slack_user_id_slack_channel_id: {
             slack_user_id: userId,
-            slack_channel_id: defaultChannel
+            slack_channel_id: channelId
           }
         }
       });
@@ -302,13 +306,13 @@ async function processNewHeartbeats(heartbeats) {
           await prisma.slackNotificationPreference.create({
             data: {
               slack_user_id: userId,
-              slack_channel_id: defaultChannel,
+              slack_channel_id: channelId,
               enabled: true
             }
           });
-          console.log(`Auto-subscribed user ${userId} to notifications in channel ${defaultChannel}`);
+          console.log(`Auto-subscribed user ${userId} to notifications in channel ${channelId}`);
         } catch (error) {
-          console.error(`Failed to auto-subscribe user ${userId}:`, error);
+          console.error(`Failed to auto-subscribe user ${userId} to channel ${channelId}:`, error);
         }
       }
     }
