@@ -287,7 +287,6 @@ async function processNewHeartbeats(heartbeats) {
     
     // Auto-subscribe user to default channels if not already subscribed
     const defaultChannels = [
-      process.env.SLACK_CHANNEL_SAILORSLOG,
       process.env.LOG_EVERYTHING_SLACK_CHANNEL_ID
     ].filter(Boolean);
 
