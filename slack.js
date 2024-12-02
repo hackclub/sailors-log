@@ -349,7 +349,7 @@ async function handleSlashCommand(formData) {
 
       if (enabled) {
         response.response_type = 'in_channel';
-        response.text = `⛵️ <@${user_id}> has enabled coding notifications in this channel! They'll share their progress with the crew.`;
+        response.text = `<@${user_id}> ran \`/sailorslog on\` to turn on High Seas notifications in this channel. Every time they code an hour on a project, a short message celebrating will be posted to this channel. They will also show on \`/sailorslog leaderboard\`.`;
       }
 
       return new Response(JSON.stringify(response), {
