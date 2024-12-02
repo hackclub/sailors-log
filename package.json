@@ -5,7 +5,6 @@
   },
   "scripts": {
     "dev": "bun run index.js",
-    "production": "bun i && cp prisma/schema.production.prisma prisma/schema.prisma && bun prisma migrate deploy && bun run prisma generate && bun run index.js",
-    "prisma:deploy": "cp prisma/schema.production.prisma prisma/schema.prisma && bunx prisma migrate deploy"
+    "production": "bun i && bun prisma migrate deploy && bun run prisma generate && bun run index.js"
   }
 }
