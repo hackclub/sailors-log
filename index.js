@@ -5,7 +5,7 @@ import slackServer from './slack.js';
 await import('dotenv').then(dotenv => dotenv.config());
 
 // Constants
-const POLL_INTERVAL = 5 * 1000; // 5 seconds
+const POLL_INTERVAL = 15 * 1000; // 15 seconds
 const RETENTION_HOURS = 24;
 const NOTIFICATION_PERIOD_SECONDS = parseInt(process.env.NOTIFICATION_PERIOD_SECONDS) || 3600; // Default 1 hour
 
