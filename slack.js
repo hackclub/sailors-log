@@ -1,5 +1,30 @@
 import { prisma, getUserApiKey } from './db.js';
 
+// Add Slack Web API client
+import { WebClient } from '@slack/web-api';
+const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
+
+// Cache for user info to avoid repeated API calls
+const userInfoCache = new Map();
+
+async function getUserInfo(userId) {
+  if (userInfoCache.has(userId)) {
+    return userInfoCache.get(userId);
+  }
+
+  try {
+    const result = await slack.users.info({ user: userId });
+    const userInfo = {
+      displayName: result.user.profile.display_name || result.user.real_name || result.user.name
+    };
+    userInfoCache.set(userId, userInfo);
+    return userInfo;
+  } catch (error) {
+    console.error(`Error fetching user info for ${userId}:`, error);
+    return { displayName: userId };
+  }
+}
+
 const port = process.env.PORT || 3000;
 
 async function getLeaderboard(channel_id, period = 'day', limit = 10) {
@@ -127,8 +152,14 @@ async function getLeaderboard(channel_id, period = 'day', limit = 10) {
   const timeframe = period === 'week' ? 'This Week' : 'Today';
   let message = `⛵ *Sailor's Log - ${timeframe}*\n\n`;
   
-  leaderboard.forEach((entry, index) => {
-    const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : '▫️';
+  // Fetch all user info in parallel
+  const userInfoPromises = leaderboard.map(entry => getUserInfo(entry.user_id));
+  const userInfos = await Promise.all(userInfoPromises);
+  
+  for (let i = 0; i < leaderboard.length; i++) {
+    const entry = leaderboard[i];
+    const userInfo = userInfos[i];
+    const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : '▫️';
     const hours = Math.floor(entry.total_minutes / 60);
     const minutes = entry.total_minutes % 60;
     const timeStr = hours > 0 ? 
@@ -138,10 +169,9 @@ async function getLeaderboard(channel_id, period = 'day', limit = 10) {
     // Format project breakdown with languages
     const projectBreakdown = Array.from(entry.projects.entries())
       .sort((a, b) => b[1].seconds - a[1].seconds)
-      .filter(([_, stats]) => Math.floor(stats.seconds / 60) > 0) // Filter out 0-minute projects
+      .filter(([_, stats]) => Math.floor(stats.seconds / 60) > 0)
       .map(([project, stats]) => {
         const minutes = Math.floor(stats.seconds / 60);
-        // Filter out unknown and AUTO_DETECTED languages
         const mainLang = stats.languages
           .filter(lang => !['unknown', 'AUTO_DETECTED', 'PLAIN_TEXT', 'Text'].includes(lang))
           .sort()[0] || '';
@@ -150,8 +180,8 @@ async function getLeaderboard(channel_id, period = 'day', limit = 10) {
       })
       .join(' + ');
     
-    message += `${medal} <@${entry.user_id}>: ${timeStr} → ${projectBreakdown}\n`;
-  });
+    message += `${medal} ${userInfo.displayName}: ${timeStr} → ${projectBreakdown}\n`;
+  }
 
   return message;
 }
