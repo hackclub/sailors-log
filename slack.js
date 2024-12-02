@@ -341,10 +341,18 @@ async function handleSlashCommand(formData) {
         }
       });
 
-      return new Response(JSON.stringify({
+      // Send a channel message when notifications are enabled
+      const response = {
         response_type: 'ephemeral',
         text: `✅ Coding notifications have been turned ${action} in this channel.`
-      }), {
+      };
+
+      if (enabled) {
+        response.response_type = 'in_channel';
+        response.text = `⛵️ <@${user_id}> has enabled coding notifications in this channel! They'll share their progress with the crew.`;
+      }
+
+      return new Response(JSON.stringify(response), {
         status: 200,
         headers: { 'Content-Type': 'application/json' }
       });
