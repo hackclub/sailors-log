@@ -180,7 +180,7 @@ async function getLeaderboard(channel_id, period = 'day', limit = 10) {
       })
       .join(' + ');
     
-    message += `${medal} ${userInfo.displayName}: ${timeStr} → ${projectBreakdown}\n`;
+    message += `${medal} \`@${userInfo.displayName}\`: ${timeStr} → ${projectBreakdown}\n`;
   }
 
   return message;
