@@ -4,21 +4,47 @@ import { prisma, getUserApiKey } from './db.js';
 import { WebClient } from '@slack/web-api';
 const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
 
-// Cache for user info to avoid repeated API calls
-const userInfoCache = new Map();
+// Cache expiry time in milliseconds (24 hours)
+const CACHE_EXPIRY_MS = 24 * 60 * 60 * 1000;
 
 async function getUserInfo(userId) {
-  if (userInfoCache.has(userId)) {
-    return userInfoCache.get(userId);
-  }
-
   try {
+    const cutoff = new Date(Date.now() - CACHE_EXPIRY_MS);
+    
+    // Check cache in database (only get entries newer than cutoff)
+    const cachedInfo = await prisma.slackUserCache.findFirst({
+      where: { 
+        slack_user_id: userId,
+        created_at: {
+          gte: cutoff
+        }
+      }
+    });
+
+    if (cachedInfo) {
+      return { displayName: cachedInfo.display_name };
+    }
+
+    // Fetch from Slack API
     const result = await slack.users.info({ user: userId });
-    const userInfo = {
-      displayName: result.user.profile.display_name || result.user.real_name || result.user.name
-    };
-    userInfoCache.set(userId, userInfo);
-    return userInfo;
+    const displayName = result.user.profile.display_name || result.user.real_name || result.user.name;
+
+    // Delete old cache entries for this user
+    await prisma.slackUserCache.deleteMany({
+      where: {
+        slack_user_id: userId
+      }
+    });
+
+    // Store in cache
+    await prisma.slackUserCache.create({
+      data: {
+        slack_user_id: userId,
+        display_name: displayName
+      }
+    });
+
+    return { displayName };
   } catch (error) {
     console.error(`Error fetching user info for ${userId}:`, error);
     return { displayName: userId };
@@ -251,14 +277,6 @@ async function handleSlashCommand(formData) {
   const channel_id = formData.get('channel_id');
 
   console.log('Received command:', { command, text, user_id, channel_id });
-
-  // Verify this is our command
-  if (command !== '/sailorslog') {
-    return new Response(JSON.stringify({ error: 'Invalid command' }), {
-      status: 400,
-      headers: { 'Content-Type': 'application/json' }
-    });
-  }
 
   // Parse the command
   const args = text?.trim().toLowerCase().split(/\s+/) || [];
