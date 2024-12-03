@@ -1,0 +1,37 @@
+{
+    "display_information": {
+        "name": "Sailor's Log",
+        "description": "Log your coding hours",
+        "background_color": "#426ff5"
+    },
+    "features": {
+        "bot_user": {
+            "display_name": "Sailor's Log",
+            "always_online": false
+        },
+        "slash_commands": [
+            {
+                "command": "/sailorslog",
+                "url": "https://sailors-log-production.up.railway.app/slack/commands",
+                "description": "Celebrate your coding hours",
+                "usage_hint": "[on|off|leaderboard]",
+                "should_escape": true
+            }
+        ]
+    },
+    "oauth_config": {
+        "scopes": {
+            "bot": [
+                "chat:write",
+                "chat:write.public",
+                "commands",
+                "users:read"
+            ]
+        }
+    },
+    "settings": {
+        "org_deploy_enabled": false,
+        "socket_mode_enabled": false,
+        "token_rotation_enabled": false
+    }
+}
