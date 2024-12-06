@@ -8,6 +8,8 @@ await import('dotenv').then(dotenv => dotenv.config());
 const POLL_INTERVAL = 15 * 1000; // 15 seconds
 const RETENTION_HOURS = 24;
 const NOTIFICATION_PERIOD_SECONDS = parseInt(process.env.NOTIFICATION_PERIOD_SECONDS) || 3600; // Default 1 hour
+const MAX_RETRIES = 5;
+const INITIAL_RETRY_DELAY = 1000; // 1 second
 
 // Add kudos messages back at the top
 const KUDOS_MESSAGES = [
@@ -20,8 +22,48 @@ const KUDOS_MESSAGES = [
   "Well done!",
 ];
 
+// Connection state
+let isConnecting = false;
+let connectionRetries = 0;
+
 function getRandomKudos() {
   return KUDOS_MESSAGES[Math.floor(Math.random() * KUDOS_MESSAGES.length)];
+}
+
+// Helper function for exponential backoff
+function getRetryDelay() {
+  return Math.min(INITIAL_RETRY_DELAY * Math.pow(2, connectionRetries), 30000); // Max 30 seconds
+}
+
+async function connectWithRetry() {
+  if (isConnecting) {
+    console.log('Connection attempt already in progress...');
+    return null;
+  }
+
+  isConnecting = true;
+  
+  try {
+    console.log('Connecting to hackatime database...');
+    const client = await hackatime.connect();
+    connectionRetries = 0; // Reset retries on successful connection
+    isConnecting = false;
+    return client;
+  } catch (error) {
+    isConnecting = false;
+    connectionRetries++;
+    
+    if (connectionRetries > MAX_RETRIES) {
+      console.error('Max connection retries exceeded. Waiting for next poll interval.');
+      connectionRetries = 0; // Reset for next attempt
+      throw error;
+    }
+
+    const delay = getRetryDelay();
+    console.log(`Connection attempt failed. Retrying in ${delay}ms... (Attempt ${connectionRetries}/${MAX_RETRIES})`);
+    await new Promise(resolve => setTimeout(resolve, delay));
+    return connectWithRetry();
+  }
 }
 
 async function sendSlackNotification(channel, message) {
@@ -180,10 +222,15 @@ async function storeHeartbeats(heartbeats) {
 }
 
 async function getHeartbeats() {
-  console.log('Connecting to hackatime database...');
-  const client = await hackatime.connect();
+  let client;
   
   try {
+    client = await connectWithRetry();
+    if (!client) {
+      console.log('Could not establish database connection');
+      return [];
+    }
+
     // Get last processed heartbeat time from SyncedHeartbeat
     console.log('Finding last synced heartbeat...');
     const lastHeartbeat = await prisma.syncedHeartbeat.findFirst({
@@ -236,9 +283,15 @@ async function getHeartbeats() {
     console.error('Error in getHeartbeats:', error);
     throw error;
   } finally {
-    console.log('Releasing database connection...');
-    await client.release();
-    console.log('Database connection released.');
+    if (client) {
+      console.log('Releasing database connection...');
+      try {
+        await client.release();
+        console.log('Database connection released.');
+      } catch (releaseError) {
+        console.error('Error releasing database connection:', releaseError);
+      }
+    }
   }
 }
 
